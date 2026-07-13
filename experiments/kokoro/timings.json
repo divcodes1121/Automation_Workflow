@@ -1,0 +1,89 @@
+{
+  "word": [
+    {
+      "segment": 0,
+      "text": "This",
+      "start": 0.275,
+      "end": 0.475,
+      "phonemes": "\u00f0\u02cc\u026as"
+    },
+    {
+      "segment": 0,
+      "text": "is",
+      "start": 0.475,
+      "end": 0.588,
+      "phonemes": "\u026az"
+    },
+    {
+      "segment": 0,
+      "text": "a",
+      "start": 0.588,
+      "end": 0.688,
+      "phonemes": "\u0250"
+    },
+    {
+      "segment": 0,
+      "text": "test",
+      "start": 0.688,
+      "end": 1.238,
+      "phonemes": "t\u02c8\u025bst"
+    },
+    {
+      "segment": 0,
+      "text": "of",
+      "start": 1.238,
+      "end": 1.337,
+      "phonemes": "\u028cv"
+    },
+    {
+      "segment": 0,
+      "text": "the",
+      "start": 1.337,
+      "end": 1.425,
+      "phonemes": "\u00f0\u0259"
+    },
+    {
+      "segment": 0,
+      "text": "Clash",
+      "start": 1.425,
+      "end": 1.8,
+      "phonemes": "kl\u02c8\u00e6\u0283"
+    },
+    {
+      "segment": 0,
+      "text": "Royale",
+      "start": 1.8,
+      "end": 2.112,
+      "phonemes": "\u0279Y\u02c8\u00e6l"
+    },
+    {
+      "segment": 0,
+      "text": "narration",
+      "start": 2.112,
+      "end": 2.575,
+      "phonemes": "n\u025b\u0279\u02c8A\u0283\u0259n"
+    },
+    {
+      "segment": 0,
+      "text": "system",
+      "start": 2.575,
+      "end": 3.25,
+      "phonemes": "s\u02c8\u026ast\u0259m"
+    },
+    {
+      "segment": 0,
+      "text": ".",
+      "start": 3.25,
+      "end": 3.4,
+      "phonemes": "."
+    }
+  ],
+  "sentence": [
+    {
+      "segment": 0,
+      "text": "This is a test of the Clash Royale narration system.",
+      "start": 0.275,
+      "end": 3.4
+    }
+  ]
+}

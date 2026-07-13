@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "name": "iphone_13",
+  "reference_width": 1170,
+  "reference_height": 2532,
+  "rois": {
+    "arena": {
+      "name": "arena",
+      "x": 0.0,
+      "y": 0.15,
+      "w": 1.0,
+      "h": 0.55
+    },
+    "hand_slot_1": {
+      "name": "hand_slot_1",
+      "x": 0.22,
+      "y": 0.82,
+      "w": 0.18,
+      "h": 0.12
+    },
+    "hand_slot_2": {
+      "name": "hand_slot_2",
+      "x": 0.42,
+      "y": 0.82,
+      "w": 0.18,
+      "h": 0.12
+    },
+    "hand_slot_3": {
+      "name": "hand_slot_3",
+      "x": 0.61,
+      "y": 0.82,
+      "w": 0.18,
+      "h": 0.12
+    },
+    "hand_slot_4": {
+      "name": "hand_slot_4",
+      "x": 0.8,
+      "y": 0.82,
+      "w": 0.18,
+      "h": 0.12
+    },
+    "elixir_bar": {
+      "name": "elixir_bar",
+      "x": 0.2,
+      "y": 0.95,
+      "w": 0.78,
+      "h": 0.025
+    },
+    "timer": {
+      "name": "timer",
+      "x": 0.8,
+      "y": 0.045,
+      "w": 0.18,
+      "h": 0.04
+    },
+    "crown_self": {
+      "name": "crown_self",
+      "x": 0.02,
+      "y": 0.66,
+      "w": 0.12,
+      "h": 0.05
+    },
+    "crown_opponent": {
+      "name": "crown_opponent",
+      "x": 0.02,
+      "y": 0.2,
+      "w": 0.12,
+      "h": 0.05
+    },
+    "king_tower_self": {
+      "name": "king_tower_self",
+      "x": 0.4,
+      "y": 0.66,
+      "w": 0.2,
+      "h": 0.1
+    },
+    "king_tower_opponent": {
+      "name": "king_tower_opponent",
+      "x": 0.4,
+      "y": 0.05,
+      "w": 0.2,
+      "h": 0.1
+    },
+    "princess_left_self": {
+      "name": "princess_left_self",
+      "x": 0.14,
+      "y": 0.55,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_right_self": {
+      "name": "princess_right_self",
+      "x": 0.7,
+      "y": 0.55,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_left_opponent": {
+      "name": "princess_left_opponent",
+      "x": 0.14,
+      "y": 0.14,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_right_opponent": {
+      "name": "princess_right_opponent",
+      "x": 0.7,
+      "y": 0.14,
+      "w": 0.16,
+      "h": 0.08
+    }
+  },
+  "is_placeholder": true,
+  "notes": "Uncalibrated placeholder ROIs (portrait CR). Tune against a real iphone_13 frame via `analyzer calibrate`."
+}

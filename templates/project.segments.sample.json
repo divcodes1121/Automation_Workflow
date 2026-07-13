@@ -1,0 +1,32 @@
+{
+  "title": "Evo Pekka Deck Breakdown | Clash Royale",
+  "description": "Segment-authored breakdown of the Evo Pekka control deck, mapping narration to the exact gameplay moments to show.",
+  "tags": ["clash royale", "evo pekka", "deck breakdown", "authored"],
+  "thumbnail_prompt": "Evo Pekka charging with electric aura, 'BREAKDOWN' banner, high-contrast red and gold, reaction face",
+  "long_script": "Authored project: the segments array below drives the timeline verbatim.",
+  "voice_style": "energetic_male_en",
+  "upload_time": "2026-07-16T17:00:00+00:00",
+  "category": "deck_guide",
+  "language": "en",
+  "shorts": [],
+  "segments": [
+    {
+      "id": 1,
+      "voice": "Today we're testing the new Evo Pekka deck on ladder.",
+      "visual": "Opening push into the arena",
+      "importance": "high"
+    },
+    {
+      "id": 2,
+      "voice": "Notice what happens when the opponent overcommits their elixir.",
+      "visual": "Replay the defensive stand",
+      "importance": "medium"
+    },
+    {
+      "id": 3,
+      "voice": "Then we flip it into a counter-push and take the tower.",
+      "visual": "Counter-push three-crown finish",
+      "importance": "high"
+    }
+  ]
+}

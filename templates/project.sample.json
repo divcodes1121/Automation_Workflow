@@ -1,0 +1,25 @@
+{
+  "title": "Insane 3-Crown Miner Control Deck | Clash Royale",
+  "description": "Full breakdown of a Miner Control deck taking three crowns in ladder. Elixir management, tower targeting, and win conditions explained.",
+  "tags": ["clash royale", "miner control", "3 crown", "ladder", "deck guide"],
+  "thumbnail_prompt": "Explosive Clash Royale arena, Miner peeking from ground, bold '3 CROWNS' text, high-contrast red and gold, shocked reaction face",
+  "long_script": "What's up everyone, today we're running one of the most consistent control decks in the current meta...",
+  "voice_style": "energetic_male_en",
+  "upload_time": "2026-07-12T17:00:00+00:00",
+  "category": "deck_guide",
+  "language": "en",
+  "shorts": [
+    {
+      "title": "This Miner Trick Wins Games",
+      "script": "Place the Miner on the back of the tower, not the front. Here's why it out-values every counter...",
+      "hook": "You've been placing Miner wrong this whole time.",
+      "duration_seconds": 32
+    },
+    {
+      "title": "Elixir Leak = Instant Loss",
+      "script": "Never let your elixir hit ten. Watch how one leak here throws the entire push...",
+      "hook": "Stop leaking elixir and start winning.",
+      "duration_seconds": 28
+    }
+  ]
+}

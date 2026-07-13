@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "name": "iphone_16_pro_max",
+  "reference_width": 1320,
+  "reference_height": 2868,
+  "rois": {
+    "hand_slot_1": {
+      "name": "hand_slot_1",
+      "x": 0.125,
+      "y": 0.848,
+      "w": 0.135,
+      "h": 0.088
+    },
+    "hand_slot_2": {
+      "name": "hand_slot_2",
+      "x": 0.275,
+      "y": 0.848,
+      "w": 0.135,
+      "h": 0.088
+    },
+    "hand_slot_3": {
+      "name": "hand_slot_3",
+      "x": 0.425,
+      "y": 0.848,
+      "w": 0.135,
+      "h": 0.088
+    },
+    "hand_slot_4": {
+      "name": "hand_slot_4",
+      "x": 0.575,
+      "y": 0.848,
+      "w": 0.135,
+      "h": 0.088
+    },
+    "opp_hand_slot_1": {
+      "name": "opp_hand_slot_1",
+      "x": 0.125,
+      "y": 0.105,
+      "w": 0.135,
+      "h": 0.068
+    },
+    "opp_hand_slot_2": {
+      "name": "opp_hand_slot_2",
+      "x": 0.275,
+      "y": 0.105,
+      "w": 0.135,
+      "h": 0.068
+    },
+    "opp_hand_slot_3": {
+      "name": "opp_hand_slot_3",
+      "x": 0.425,
+      "y": 0.105,
+      "w": 0.135,
+      "h": 0.068
+    },
+    "opp_hand_slot_4": {
+      "name": "opp_hand_slot_4",
+      "x": 0.575,
+      "y": 0.105,
+      "w": 0.135,
+      "h": 0.068
+    },
+    "arena": {
+      "name": "arena",
+      "x": 0.02,
+      "y": 0.18,
+      "w": 0.96,
+      "h": 0.56
+    },
+    "timer": {
+      "name": "timer",
+      "x": 0.78,
+      "y": 0.055,
+      "w": 0.2,
+      "h": 0.035
+    },
+    "elixir_self": {
+      "name": "elixir_self",
+      "x": 0.03,
+      "y": 0.955,
+      "w": 0.6,
+      "h": 0.02
+    },
+    "elixir_opp": {
+      "name": "elixir_opp",
+      "x": 0.03,
+      "y": 0.072,
+      "w": 0.6,
+      "h": 0.02
+    },
+    "king_tower_self": {
+      "name": "king_tower_self",
+      "x": 0.4,
+      "y": 0.66,
+      "w": 0.2,
+      "h": 0.09
+    },
+    "king_tower_opponent": {
+      "name": "king_tower_opponent",
+      "x": 0.4,
+      "y": 0.14,
+      "w": 0.2,
+      "h": 0.09
+    },
+    "princess_left_self": {
+      "name": "princess_left_self",
+      "x": 0.16,
+      "y": 0.55,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_right_self": {
+      "name": "princess_right_self",
+      "x": 0.68,
+      "y": 0.55,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_left_opponent": {
+      "name": "princess_left_opponent",
+      "x": 0.16,
+      "y": 0.22,
+      "w": 0.16,
+      "h": 0.08
+    },
+    "princess_right_opponent": {
+      "name": "princess_right_opponent",
+      "x": 0.68,
+      "y": 0.22,
+      "w": 0.16,
+      "h": 0.08
+    }
+  },
+  "is_placeholder": false,
+  "notes": "Player hand slots measured+ORB-validated. Opponent hand slots measured (replay view). Arena/timer/elixir/towers estimated pending 2F/2G."
+}

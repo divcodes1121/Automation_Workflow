@@ -1,0 +1,14 @@
+{
+  "source_file": "gameplay\\raw\\example.mp4",
+  "file_size_bytes": 48247,
+  "video_hash": "2b36db65b4c2de1419d0d0b3bc199f56038fc3d0c66d3d15382c9aa19ed40321",
+  "container_format": "mov,mp4,m4a,3gp,3g2,mj2",
+  "duration_seconds": 3.0,
+  "video_codec": "h264",
+  "width": 1280,
+  "height": 720,
+  "fps": 30.0,
+  "bitrate_bps": 128658,
+  "creation_date": null,
+  "analyzed_at": "2026-07-11T10:52:32.609492Z"
+}
