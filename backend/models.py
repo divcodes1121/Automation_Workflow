@@ -292,7 +292,23 @@ class GeneratedPrompt(BaseModel):
 
 
 # Schema version for the highlight-edit plan artifact (gaming-highlights mode).
-HIGHLIGHT_PLAN_SCHEMA_VERSION = "1.0"
+HIGHLIGHT_PLAN_SCHEMA_VERSION = "1.1"
+
+
+class HighlightRole(StrEnum):
+    """A clip's job in the reel's story arc (drives pacing now, effects later).
+
+    ``HOOK`` opens on the first signature play, ``BEAT`` escalates through the
+    middle plays with tight windows, ``FLASH`` is a sub-2s phase-change insert
+    (Double Elixir / Overtime), ``HERO`` is the payoff play with a longer
+    window, ``VICTORY`` is the end screen.
+    """
+
+    HOOK = "hook"
+    BEAT = "beat"
+    FLASH = "flash"
+    HERO = "hero"
+    VICTORY = "victory"
 
 
 class HighlightClip(BaseModel):
@@ -301,13 +317,14 @@ class HighlightClip(BaseModel):
     The window is placed around the *real* event timestamp from the analyzer
     (``gameplay_analysis.json``), not a linear slice — this is the core of the
     "gaming highlights" mode. ``label`` is a viewer-facing tag (e.g. "ROCKET",
-    "OVERTIME") that later slices turn into an on-screen caption; for now it is
-    recorded but not burned in.
+    "OVERTIME") that later slices turn into an on-screen caption; ``role`` is
+    the clip's job in the story arc (later slices apply per-role effects).
     """
 
     model_config = _STRICT_CONFIG
 
     index: int = Field(ge=0)  # order in the reel
+    role: HighlightRole = HighlightRole.BEAT
     event_timestamp_seconds: float = Field(ge=0)  # the moment in the source video
     card: str | None = None
     phase: str | None = None

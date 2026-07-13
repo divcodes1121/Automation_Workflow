@@ -1,17 +1,25 @@
-"""Gaming-highlights editor (Phase 3.1 + 3.2): event-synced cuts, original audio.
+"""Gaming-highlights editor (Phase 3.1 + 3.2): story-arc cuts, original audio.
 
-The pivot from "AI documentary" to "gaming highlight editor". Instead of narrating
-a whole match over a linear slice of footage, this cuts the ORIGINAL recording
-into short windows placed around the *real* event timestamps the analyzer already
-produces (`gameplay_analysis.json`), and keeps the ORIGINAL Clash Royale audio —
-no TTS. The analyzer's events drive the editing.
+The pivot from "AI documentary" to "gaming highlight editor". The analyzer's real
+event timestamps (`gameplay_analysis.json`) drive the editing; the ORIGINAL Clash
+Royale audio is kept — no TTS anywhere in this path.
 
-This first slice is deliberately minimal (the "minimal proof" scope): pick ~5-6
-marquee moments (Rockets, the Double-Elixir switch, Overtime), cut a tight window
-around each real timestamp, and concatenate with the game audio intact. Captions
-(3.4) and effects (3.3) layer on top later. It is fully ADDITIVE — the frozen
-narrated pipeline is untouched — and stays decoupled from the analyzer package
-(reads the analysis JSON as a dict).
+The reel is a STORY, not a chronological summary, built around the deck's
+signature win condition (default: rocket; parameterized so Hog/Miner/Graveyard
+archetypes generalize later):
+
+    HOOK   — open immediately on the first signature play (tight window)
+    BEAT   — each middle play: ~1-2s before placement, launch, impact, aftermath
+    FLASH  — a sub-2s phase splash (Double Elixir / Overtime) inserted only when
+             the phase change falls BETWEEN plays (never its own long clip)
+    HERO   — the final signature play gets the longest window (the payoff)
+    VICTORY— the end screen closes the reel (recordings end on the banner)
+
+Everything stays chronological (no reordering — honest editing), hard cuts only
+(fast transitions/effects are the next slice; clip `role`s exist so that slice
+can style each beat differently). Fully additive: the narrated pipeline is
+untouched, and this module reads the analysis JSON as a dict (never imports the
+analyzer package).
 """
 
 from __future__ import annotations
@@ -24,18 +32,24 @@ from pathlib import Path
 from typing import Any
 
 from backend.config import Settings, get_settings
-from backend.models import HighlightClip, HighlightPlan
+from backend.models import HighlightClip, HighlightPlan, HighlightRole
 
 logger = logging.getLogger(__name__)
 
-# Window around each event. Pre-roll is generous because play-detection confirms
-# a card ~1-2s AFTER the real placement, so the actual action sits *before* the
-# recorded timestamp; post-roll covers the payoff (e.g. a Rocket landing).
-_PRE_ROLL_S = 2.5
-_POST_ROLL_S = 4.0
-_MERGE_GAP_S = 0.75  # windows closer than this are fused into one continuous beat
-_MAX_CLIPS = 6       # "minimal proof" cap
+# Play-detection confirms a card ~1-2s AFTER the real placement, so the actual
+# action sits BEFORE the recorded timestamp; windows lead with that in mind.
+_HOOK_PRE_S, _HOOK_POST_S = 2.0, 3.5     # open right on the action
+_BEAT_PRE_S, _BEAT_POST_S = 2.5, 3.0     # placement -> launch -> impact -> 1s after
+_HERO_PRE_S, _HERO_POST_S = 2.5, 5.0     # the payoff breathes a little longer
+_FLASH_PRE_S, _FLASH_POST_S = 0.5, 1.2   # phase splash: blink-and-it's-gone
+_VICTORY_TAIL_S = 3.0                    # recordings end on the Victory banner
+_MERGE_GAP_S = 0.25                      # near-adjacent windows fuse into one beat
+_MAX_REEL_S = 45.0                       # Shorts budget
 _CRF = 20
+
+# Viewer-facing card names for labels ("rocket" -> "ROCKET").
+def _card_label(slug: str) -> str:
+    return slug.replace("-", " ").upper()
 
 
 class HighlightError(ValueError):
@@ -43,27 +57,40 @@ class HighlightError(ValueError):
 
 
 class HighlightEditor:
-    """Selects marquee events and renders a gameplay-only highlight reel."""
+    """Builds and renders a story-arc highlight reel around a signature card."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
 
     # -- Planning (pure) ----------------------------------------------------- #
 
-    def build(self, analysis: dict[str, Any], video: Path) -> HighlightPlan:
-        """Select marquee moments and their event-synced windows (no I/O)."""
+    def build(
+        self, analysis: dict[str, Any], video: Path, *, signature_card: str = "rocket"
+    ) -> HighlightPlan:
+        """Select the story beats and their event-synced windows (no I/O)."""
         if not isinstance(analysis, dict) or "events" not in analysis:
             raise HighlightError(
                 "not a gameplay analysis (missing 'events'); pass a "
                 "gameplay_analysis.json produced by the analyzer"
             )
         duration = float(analysis.get("duration_seconds") or 0.0)
-        selected = _select_marquee(analysis)
-        windows = _windows(selected, duration)
+        plays = [
+            float(e.get("timestamp_seconds") or 0.0)
+            for e in analysis.get("events", [])
+            if e.get("card") == signature_card
+        ]
+        if not plays:
+            raise HighlightError(
+                f"no '{signature_card}' plays found in this match; pick the deck's "
+                "signature card with --card"
+            )
+        plays.sort()
 
+        windows = _story_windows(plays, _phase_changes(analysis), duration, signature_card)
         clips = [
             HighlightClip(
                 index=i,
+                role=w["role"],
                 event_timestamp_seconds=round(w["ts"], 3),
                 card=w["card"],
                 phase=w["phase"],
@@ -139,58 +166,116 @@ class HighlightEditor:
 
 
 # --------------------------------------------------------------------------- #
-# Selection (pure)
+# Story construction (pure)
 # --------------------------------------------------------------------------- #
-def _state_for(analysis: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+# A phase/multiplier change only counts when SUSTAINED this many consecutive
+# timeline states (~seconds). Real phases last minutes; the match-intro screen
+# can misread as "overtime" for a couple of unreadable frames (seen in game_01
+# at t=2-3s, timer confidence 0.0) and must not become a flash.
+_SUSTAIN_STATES = 5
+
+
+def _phase_changes(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    """First sustained Double-Elixir switch + Overtime start, from the 2G timeline."""
     states = analysis.get("match_states") or []
-    ref = event.get("match_state_ref")
-    if isinstance(ref, int) and 0 <= ref < len(states):
-        return states[ref]
-    return {}
+
+    def first_sustained(pred) -> float | None:
+        run_start: float | None = None
+        run_len = 0
+        for state in states:
+            if pred(state):
+                if run_len == 0:
+                    run_start = float(state.get("timestamp_seconds") or 0.0)
+                run_len += 1
+                if run_len >= _SUSTAIN_STATES:
+                    return run_start
+            else:
+                run_len = 0
+        return None
+
+    changes: list[dict[str, Any]] = []
+    double_ts = first_sustained(
+        lambda s: s.get("phase") == "regulation" and s.get("elixir_multiplier") == 2
+    )
+    if double_ts is not None:
+        changes.append({"ts": double_ts, "label": "DOUBLE ELIXIR", "phase": "regulation"})
+    overtime_ts = first_sustained(lambda s: s.get("phase") == "overtime")
+    if overtime_ts is not None:
+        changes.append({"ts": overtime_ts, "label": "OVERTIME", "phase": "overtime"})
+    return changes
 
 
-def _select_marquee(analysis: dict[str, Any]) -> list[dict[str, Any]]:
-    """Pick the marquee moments (deterministic, no ML): Rockets + the switch to
-    Double Elixir + the start of Overtime. Deduped, sorted by time, capped."""
-    events = analysis.get("events", [])
-    picks: dict[int, dict[str, Any]] = {}  # event index -> record (dedup)
-    seen_double = seen_overtime = False
+def _story_windows(
+    plays: list[float],
+    phase_changes: list[dict[str, Any]],
+    duration: float,
+    card: str,
+) -> list[dict[str, Any]]:
+    """Arrange hook/beats/hero/victory + phase flashes into merged windows."""
+    label = _card_label(card)
+    raw: list[dict[str, Any]] = []
 
-    for idx, event in enumerate(events):
-        state = _state_for(analysis, event)
-        phase = state.get("phase")
-        mult = state.get("elixir_multiplier")
-        card = event.get("card")
-        ts = float(event.get("timestamp_seconds") or 0.0)
+    # Hook = first play, tight. Hero = last play, longer. Middles = beats.
+    for i, ts in enumerate(plays):
+        if i == 0:
+            role, pre, post, lab = HighlightRole.HOOK, _HOOK_PRE_S, _HOOK_POST_S, label
+        elif i == len(plays) - 1:
+            role, pre, post, lab = HighlightRole.HERO, _HERO_PRE_S, _HERO_POST_S, f"FINAL {label}"
+        else:
+            role, pre, post, lab = HighlightRole.BEAT, _BEAT_PRE_S, _BEAT_POST_S, label
+        raw.append(
+            {"ts": ts, "role": role, "card": card, "phase": None, "label": lab,
+             "start": max(0.0, ts - pre), "end": min(duration, ts + post) if duration else ts + post}
+        )
 
-        label = None
-        if phase == "overtime" and not seen_overtime:
-            label, seen_overtime = "OVERTIME", True
-        elif card == "rocket":
-            label = "ROCKET"
-        elif phase == "regulation" and mult == 2 and not seen_double:
-            label, seen_double = "DOUBLE ELIXIR", True
-
-        if label is not None:
-            picks[idx] = {"ts": ts, "card": card, "phase": phase, "label": label}
-
-    ordered = sorted(picks.values(), key=lambda r: r["ts"])
-    return ordered[:_MAX_CLIPS]
-
-
-def _windows(selected: list[dict[str, Any]], duration: float) -> list[dict[str, Any]]:
-    """Turn events into clamped, merged [start, end] windows around each timestamp."""
-    windows: list[dict[str, Any]] = []
-    for rec in selected:
-        start = max(0.0, rec["ts"] - _PRE_ROLL_S)
-        end = rec["ts"] + _POST_ROLL_S
-        if duration > 0:
-            end = min(end, duration)
-        if end <= start:
+    # Merge overlapping/near-adjacent play windows (keeps the earlier clip's
+    # label/role; a fused hook+beat still opens the reel correctly).
+    raw.sort(key=lambda w: w["start"])
+    merged: list[dict[str, Any]] = []
+    for w in raw:
+        if merged and w["start"] <= merged[-1]["end"] + _MERGE_GAP_S:
+            merged[-1]["end"] = max(merged[-1]["end"], w["end"])
+            # A hero folded into the previous window keeps the payoff role.
+            if w["role"] == HighlightRole.HERO:
+                merged[-1]["role"] = HighlightRole.HERO
+                merged[-1]["label"] = w["label"]
             continue
-        if windows and start <= windows[-1]["end"] + _MERGE_GAP_S:
-            # Overlapping/adjacent -> fuse into one continuous beat (keep 1st label).
-            windows[-1]["end"] = max(windows[-1]["end"], end)
+        merged.append(w)
+
+    # Phase flashes: only when the change lands BETWEEN reel windows (never
+    # before the hook or inside a play window) — a blink insert, not a clip.
+    first_start, last_end = merged[0]["start"], merged[-1]["end"]
+    for change in phase_changes:
+        ts = change["ts"]
+        if not (first_start < ts < last_end):
             continue
-        windows.append({**rec, "start": start, "end": end})
-    return windows
+        if any(w["start"] - _FLASH_PRE_S <= ts <= w["end"] + _FLASH_PRE_S for w in merged):
+            continue
+        merged.append(
+            {"ts": ts, "role": HighlightRole.FLASH, "card": None,
+             "phase": change["phase"], "label": change["label"],
+             "start": max(0.0, ts - _FLASH_PRE_S),
+             "end": min(duration, ts + _FLASH_POST_S) if duration else ts + _FLASH_POST_S}
+        )
+
+    # Victory screen closes the reel (recordings end on the banner). Skip it if
+    # the hero window already reaches the end.
+    if duration > _VICTORY_TAIL_S and last_end < duration - _MERGE_GAP_S:
+        merged.append(
+            {"ts": duration, "role": HighlightRole.VICTORY, "card": None,
+             "phase": None, "label": "VICTORY",
+             "start": duration - _VICTORY_TAIL_S, "end": duration}
+        )
+
+    merged.sort(key=lambda w: w["start"])
+
+    # Shorts budget: if over, trim middle BEATs first (hook/hero/victory stay).
+    def total() -> float:
+        return sum(w["end"] - w["start"] for w in merged)
+
+    while total() > _MAX_REEL_S:
+        beats = [w for w in merged if w["role"] == HighlightRole.BEAT]
+        if not beats:
+            break
+        merged.remove(beats[len(beats) // 2])  # drop from the middle outward
+    return merged

@@ -1784,11 +1784,14 @@ def highlight(
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Output MP4 (default: edited/<video>.highlight.mp4)."
     ),
+    card: str = typer.Option(
+        "rocket", "--card", help="The deck's signature win-condition card (story anchor)."
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Select + save the plan without rendering."
     ),
 ) -> None:
-    """Cut an event-synced gameplay highlight reel, keeping the original audio (Phase 3.1/3.2)."""
+    """Cut a story-arc gameplay highlight reel, keeping the original audio (Phase 3.1/3.2)."""
     configure_logging()
 
     if not analysis_file.is_file():
@@ -1802,7 +1805,7 @@ def highlight(
 
     editor = HighlightEditor()
     try:
-        plan = editor.build(analysis, video)
+        plan = editor.build(analysis, video, signature_card=card)
         if not plan.clips:
             console.print("[bold red]No marquee moments found to highlight.[/bold red]")
             raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)
@@ -1818,17 +1821,19 @@ def highlight(
 
     table = Table(show_header=True, box=None, pad_edge=False)
     table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Role", style="green")
     table.add_column("Event t", style="magenta")
     table.add_column("Window", style="white")
+    table.add_column("Dur", style="white", justify="right")
     table.add_column("Label", style="yellow")
-    table.add_column("Card", style="dim")
     for c in plan.clips:
         table.add_row(
             str(c.index + 1),
+            c.role.value,
             f"{c.event_timestamp_seconds:.1f}s",
             f"{c.source_start_seconds:.1f}-{c.source_end_seconds:.1f}s",
+            f"{c.duration_seconds:.1f}s",
             c.label,
-            c.card or "-",
         )
     console.print(
         Panel(
