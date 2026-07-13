@@ -263,6 +263,34 @@ class Project(BaseModel):
         return len(self.shorts)
 
 
+# Schema version for the Phase-3 Claude prompt artifact.
+GENERATED_PROMPT_SCHEMA_VERSION = "1.0"
+
+
+class GeneratedPrompt(BaseModel):
+    """A ready-to-send Claude prompt that turns a match analysis into a project.
+
+    Phase 3's deterministic core (see
+    :class:`~backend.services.project_generator.ProjectGenerator`): it distills a
+    ``gameplay_analysis.json`` into ``prompt`` — the exact text a human pastes
+    into Claude to get back a valid ``project.json``. Building the *prompt* is
+    pure and free; the Claude call itself is a swappable step (manual paste today,
+    an API adapter later). The extra fields are a distilled record of what the
+    prompt was built from, for inspection/regression.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    schema_version: str = GENERATED_PROMPT_SCHEMA_VERSION
+    generated_at: datetime
+    source_analysis: str  # analysis file (or video) the prompt was built from
+    video: str
+    player_deck: list[str]
+    opponent_deck: list[str]
+    play_count: int
+    prompt: str  # the full text to paste into Claude
+
+
 class TimelineTiming(BaseModel):
     """Timing of a single timeline segment, keeping estimates and actuals apart.
 

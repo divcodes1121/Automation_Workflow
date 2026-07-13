@@ -16,6 +16,7 @@ Feature commands are exposed::
     python -m backend.main thumbnail path/to/project.json       # Feature 9B
     python -m backend.main upload    path/to/project.json       # Feature 10
     python -m backend.main run       path/to/project.json       # Feature 11
+    python -m backend.main generate-prompt gameplay/analysis/game_01.gameplay_analysis.json  # Phase 3
 
 The CLI is intentionally *thin*: it parses arguments, calls a service, renders a
 Rich summary, and maps failures to distinct process exit codes (read by n8n).
@@ -63,10 +64,13 @@ Exit codes
     Upload failed (invalid request or YouTube API error).
 19
     Upload failed (missing/invalid OAuth credentials).
+20
+    Claude prompt could not be generated from the analysis JSON.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from enum import IntEnum
@@ -116,6 +120,10 @@ from backend.services.kokoro_runner import (
 )
 from backend.services.speech import SpeechSynthesisService
 from backend.services.planner import EditPlanError, GameplayPlanner
+from backend.services.project_generator import (
+    ProjectGenerationError,
+    ProjectGenerator,
+)
 from backend.services.renderer import RenderError, VideoRenderer
 from backend.services.subtitle_renderer import SubtitleBurnError, SubtitleRenderer
 from backend.services.subtitles import SubtitleGenerationError, SubtitleGenerator
@@ -171,6 +179,7 @@ class ExitCode(IntEnum):
     THUMBNAIL_RENDER_ERROR = 17
     UPLOAD_ERROR = 18
     UPLOAD_AUTH_ERROR = 19
+    GENERATE_PROMPT_ERROR = 20
 
 
 def _human_bytes(num: int) -> str:
@@ -1686,6 +1695,78 @@ def run(
 
     saved_to = output or get_settings().edited_dir / f"{_project_slug(project)}.run_result.json"
     _render_run_summary(result, saved_to)
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: Claude project generator (prompt-pack, manual paste)
+# --------------------------------------------------------------------------- #
+def _analysis_base_name(analysis_file: Path) -> str:
+    """'game_01.gameplay_analysis.json' -> 'game_01' (fallback: file stem)."""
+    name = analysis_file.name
+    suffix = ".gameplay_analysis.json"
+    return name[: -len(suffix)] if name.endswith(suffix) else analysis_file.stem
+
+
+@app.command(name="generate-prompt")
+def generate_prompt(
+    analysis_file: Path = typer.Argument(
+        ..., help="A gameplay_analysis.json produced by the analyzer."
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Prompt path (default: <analysis_dir>/<base>.claude_prompt.txt).",
+    ),
+) -> None:
+    """Distill a match analysis into a Claude prompt for project.json (Phase 3)."""
+    configure_logging()
+
+    if not analysis_file.is_file():
+        console.print(f"[bold red]Analysis not found:[/bold red] {analysis_file}")
+        raise typer.Exit(code=ExitCode.FILE_NOT_FOUND)
+    try:
+        analysis = json.loads(analysis_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        console.print(f"[bold red]Invalid analysis JSON:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.PARSE_ERROR)
+
+    try:
+        generated = ProjectGenerator().build(analysis)
+    except ProjectGenerationError as exc:
+        console.print(f"[bold red]Cannot build prompt:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.GENERATE_PROMPT_ERROR)
+    except Exception as exc:  # noqa: BLE001 — final safety net for the CLI.
+        logger.exception("Unexpected error while generating the prompt")
+        console.print(f"[bold red]Unexpected error:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.UNEXPECTED)
+
+    dest = output or analysis_file.parent / f"{_analysis_base_name(analysis_file)}.claude_prompt.txt"
+    saved_to = ProjectGenerator().save(generated, dest)
+
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="white")
+    table.add_row("Video", generated.video)
+    table.add_row("Player deck", f"{len(generated.player_deck)} cards")
+    table.add_row("Opponent deck", f"{len(generated.opponent_deck)} cards")
+    table.add_row("Player plays", str(generated.play_count))
+    table.add_row("Prompt chars", str(len(generated.prompt)))
+    console.print(
+        Panel(
+            table,
+            title="[bold green]Claude prompt generated[/bold green]",
+            subtitle="[dim]AI Creator Studio[/dim]",
+            border_style="green",
+            expand=False,
+        )
+    )
+    console.print(f"[dim]Prompt {saved_to}[/dim]")
+    console.print(
+        "[dim]Next: paste it into Claude, save the reply as project.json, then "
+        "`validate` and `run`.[/dim]"
+    )
     raise typer.Exit(code=ExitCode.SUCCESS)
 
 
