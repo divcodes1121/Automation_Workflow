@@ -291,6 +291,53 @@ class GeneratedPrompt(BaseModel):
     prompt: str  # the full text to paste into Claude
 
 
+# Schema version for the highlight-edit plan artifact (gaming-highlights mode).
+HIGHLIGHT_PLAN_SCHEMA_VERSION = "1.0"
+
+
+class HighlightClip(BaseModel):
+    """One event-synced clip window cut from the original gameplay recording.
+
+    The window is placed around the *real* event timestamp from the analyzer
+    (``gameplay_analysis.json``), not a linear slice — this is the core of the
+    "gaming highlights" mode. ``label`` is a viewer-facing tag (e.g. "ROCKET",
+    "OVERTIME") that later slices turn into an on-screen caption; for now it is
+    recorded but not burned in.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0)  # order in the reel
+    event_timestamp_seconds: float = Field(ge=0)  # the moment in the source video
+    card: str | None = None
+    phase: str | None = None
+    label: str  # viewer-facing tag for a future caption
+    source_start_seconds: float = Field(ge=0)
+    source_end_seconds: float = Field(ge=0)
+    duration_seconds: float = Field(gt=0)
+
+
+class HighlightPlan(BaseModel):
+    """A gameplay-only highlight edit: which windows to cut and why.
+
+    Built by :class:`~backend.services.highlight_editor.HighlightEditor` from a
+    match analysis. Mode ``gameplay_only`` keeps the ORIGINAL Clash Royale audio
+    and adds no narration — the analyzer's events drive the *editing* instead of
+    a voiceover. Captions/effects (later slices) layer on top of these clips.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    schema_version: str = HIGHLIGHT_PLAN_SCHEMA_VERSION
+    generated_at: datetime
+    mode: str = "gameplay_only"
+    source_analysis: str
+    video: str
+    clip_count: int = Field(ge=0)
+    total_duration_seconds: float = Field(ge=0)
+    clips: list[HighlightClip]
+
+
 class TimelineTiming(BaseModel):
     """Timing of a single timeline segment, keeping estimates and actuals apart.
 

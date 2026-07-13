@@ -120,6 +120,7 @@ from backend.services.kokoro_runner import (
 )
 from backend.services.speech import SpeechSynthesisService
 from backend.services.planner import EditPlanError, GameplayPlanner
+from backend.services.highlight_editor import HighlightEditor, HighlightError
 from backend.services.project_generator import (
     ProjectGenerationError,
     ProjectGenerator,
@@ -180,6 +181,7 @@ class ExitCode(IntEnum):
     UPLOAD_ERROR = 18
     UPLOAD_AUTH_ERROR = 19
     GENERATE_PROMPT_ERROR = 20
+    HIGHLIGHT_ERROR = 21
 
 
 def _human_bytes(num: int) -> str:
@@ -1767,6 +1769,81 @@ def generate_prompt(
         "[dim]Next: paste it into Claude, save the reply as project.json, then "
         "`validate` and `run`.[/dim]"
     )
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3.1/3.2: gaming-highlights editor (event-synced cuts, original audio)
+# --------------------------------------------------------------------------- #
+@app.command()
+def highlight(
+    analysis_file: Path = typer.Argument(
+        ..., help="A gameplay_analysis.json produced by the analyzer."
+    ),
+    video: Path = typer.Argument(..., help="The original gameplay recording (.mp4)."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output MP4 (default: edited/<video>.highlight.mp4)."
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only", help="Select + save the plan without rendering."
+    ),
+) -> None:
+    """Cut an event-synced gameplay highlight reel, keeping the original audio (Phase 3.1/3.2)."""
+    configure_logging()
+
+    if not analysis_file.is_file():
+        console.print(f"[bold red]Analysis not found:[/bold red] {analysis_file}")
+        raise typer.Exit(code=ExitCode.FILE_NOT_FOUND)
+    try:
+        analysis = json.loads(analysis_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        console.print(f"[bold red]Invalid analysis JSON:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.PARSE_ERROR)
+
+    editor = HighlightEditor()
+    try:
+        plan = editor.build(analysis, video)
+        if not plan.clips:
+            console.print("[bold red]No marquee moments found to highlight.[/bold red]")
+            raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)
+        editor.save(plan)
+        rendered = None if plan_only else editor.render(plan, video, output)
+    except HighlightError as exc:
+        console.print(f"[bold red]Highlight failed:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)
+    except Exception as exc:  # noqa: BLE001 — final safety net for the CLI.
+        logger.exception("Unexpected error during highlight edit")
+        console.print(f"[bold red]Unexpected error:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.UNEXPECTED)
+
+    table = Table(show_header=True, box=None, pad_edge=False)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("Event t", style="magenta")
+    table.add_column("Window", style="white")
+    table.add_column("Label", style="yellow")
+    table.add_column("Card", style="dim")
+    for c in plan.clips:
+        table.add_row(
+            str(c.index + 1),
+            f"{c.event_timestamp_seconds:.1f}s",
+            f"{c.source_start_seconds:.1f}-{c.source_end_seconds:.1f}s",
+            c.label,
+            c.card or "-",
+        )
+    console.print(
+        Panel(
+            table,
+            title=f"[bold green]Highlight reel: {plan.clip_count} clips, "
+            f"{plan.total_duration_seconds:.0f}s[/bold green]",
+            subtitle="[dim]gameplay-only (original audio, no narration)[/dim]",
+            border_style="green",
+            expand=False,
+        )
+    )
+    if rendered is not None:
+        console.print(f"[green]OK[/green] Highlight reel -> {rendered}")
+    else:
+        console.print("[dim](--plan-only: not rendered)[/dim]")
     raise typer.Exit(code=ExitCode.SUCCESS)
 
 
