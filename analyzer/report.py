@@ -44,6 +44,8 @@ def format_report(analysis: GameplayAnalysis) -> str:
         lines.append(f"  Avg ORB / conf   : {m.average_orb_matches:.0f} / {m.average_confidence*100:.0f}%")
         lines.append(f"  Time / FPS       : {m.processing_seconds:.0f}s / {m.fps_processed:.2f} fps")
 
+    _match_state_section(lines, analysis)
+
     problems = _potential_errors(analysis)
     lines.append("")
     lines.append("Potential Errors")
@@ -72,6 +74,33 @@ def _deck_section(lines: list[str], title: str, deck: ReconstructedDeck | None) 
         lines.append(
             f"  {mark} {name:<20}  obs={c.observation_count:<4} "
             f"ORB={c.average_match_score:>3.0f}  conf={c.confidence*100:>3.0f}%{flag}"
+        )
+
+
+def _match_state_section(lines: list[str], analysis: GameplayAnalysis) -> None:
+    """Summarize the 2G match-state timeline (timer / phase / elixir)."""
+    states = analysis.match_states
+    if not states:
+        return
+    readable = sum(1 for s in states if s.time_remaining is not None)
+    phases = sorted({s.phase.value for s in states})
+    elx = [s.player_elixir for s in states if s.player_elixir is not None]
+    lines.append("")
+    lines.append("Match State (2G)")
+    lines.append(f"  Timeline states  : {len(states)} (~1/sec)")
+    lines.append(f"  Timer readable   : {readable}/{len(states)} ({100*readable/len(states):.0f}%)")
+    lines.append(f"  Phases seen      : {', '.join(phases)}")
+    if elx:
+        lines.append(f"  Player elixir    : {min(elx)}-{max(elx)} (last {elx[-1]})")
+    # A few evenly-spaced samples so the timeline is visible at a glance.
+    picks = sorted({0, len(states) // 4, len(states) // 2, 3 * len(states) // 4, len(states) - 1})
+    for i in picks:
+        s = states[i]
+        t = s.time_remaining or "--:--"
+        mult = f"{s.elixir_multiplier}x" if s.elixir_multiplier else "?x"
+        lines.append(
+            f"    t={s.timestamp_seconds:6.1f}s  {t:>5} {s.phase.value:<10} {mult}  "
+            f"elixir {s.player_elixir}/{s.opponent_elixir}"
         )
 
 

@@ -134,12 +134,15 @@ class AnalyzerWorkflow:
         import cv2
 
         from analyzer.calibration.profiles import load_profile
+        from analyzer.detectors.elixir_detector import ElixirDetector
         from analyzer.detectors.hand_detector import HandDetector
         from analyzer.detectors.play_detector import PlayDetector
+        from analyzer.detectors.timer_detector import TimerDetector
         from analyzer.models import AnalyzerMetrics
         from analyzer.preprocess.frame_extractor import FrameExtractor
         from analyzer.tracking.deck_reconstructor import DeckReconstructor
         from analyzer.tracking.event_builder import EventBuilder
+        from analyzer.tracking.match_state import RawSample, build_timeline
 
         s = self._settings
         profile = load_profile(profile_name, s)
@@ -150,6 +153,13 @@ class AnalyzerWorkflow:
         player_recon = DeckReconstructor("player", s)
         opponent_recon = DeckReconstructor("opponent", s)
         player_readings: list[HandReading] = []
+
+        # 2G match-state: sample the timer + elixir ~once per interval (they only
+        # change ~1/sec, so this is far sparser than the hand read every frame).
+        timer_detector = TimerDetector(s)
+        elixir_detector = ElixirDetector(s)
+        raw_samples: list[RawSample] = []
+        last_state_ts: float | None = None
 
         conf_norm = 2 * s.orb_min_matches  # ORB score at which a slot reads ~100% confident
         m_frames = m_slots = m_ids = m_unknown = 0
@@ -176,6 +186,24 @@ class AnalyzerWorkflow:
             player_readings.append(player)
             player_recon.update(player)
             opponent_recon.update(opponent)
+
+            ts = frame.timestamp_seconds
+            if last_state_ts is None or (ts - last_state_ts) >= s.match_state_interval_s:
+                timer = timer_detector.read(image, profile)
+                self_elixir, opp_elixir = elixir_detector.read_both(image, profile)
+                raw_samples.append(
+                    RawSample(
+                        timestamp_seconds=ts,
+                        source_frame=frame.source_frame,
+                        phase=timer.phase,
+                        time_text=timer.text,
+                        time_seconds=timer.seconds,
+                        timer_confidence=timer.confidence,
+                        player_elixir=self_elixir,
+                        opponent_elixir=opp_elixir,
+                    )
+                )
+                last_state_ts = ts
             for reading in (player, opponent):
                 for slot in reading.slots:
                     m_slots += 1
@@ -201,6 +229,7 @@ class AnalyzerWorkflow:
             matching_method=s.matching_method,
         )
 
+        match_states = build_timeline(raw_samples)
         plays = PlayDetector(s).detect(player_readings)
         builder = EventBuilder(s)
         analysis = builder.build(
@@ -212,6 +241,7 @@ class AnalyzerWorkflow:
             sample_fps=manifest.sample_fps,
             frame_count=manifest.frame_count,
             profile_name=profile.name,
+            match_states=match_states,
             player_deck=player_recon.deck(),
             opponent_deck=opponent_recon.deck(),
             metrics=metrics,

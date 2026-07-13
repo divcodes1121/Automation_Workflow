@@ -131,6 +131,22 @@ class AnalyzerSettings(BaseModel):
     hand_skip_unchanged: bool = Field(default=False)
     hand_change_threshold: float = Field(default=6.0, ge=0.0)
 
+    # -- 2G Match state (timer / elixir) --------------------------------------
+    # Directory of CR timer digit templates ("<d>_<regime>.png"): committed art
+    # (regime = reg | ot, for regulation dark-bg vs overtime red-bg rendering).
+    timer_templates_dir: Path
+    # Emit at most one MatchState snapshot per this many seconds of footage (the
+    # timer + elixir change ~1/sec, so denser sampling only bloats the JSON).
+    match_state_interval_s: float = Field(default=1.0, gt=0)
+    # A timer read below this per-digit confidence is discarded (time -> None but
+    # phase is still reported). Tuned from the read-test: regulation ~0.62-0.99,
+    # bad overtime reads ~0.40.
+    timer_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Elixir bar reader: skip the leftmost fraction (the "10" cap glyph) then a
+    # bar column counts as filled when > elixir_column_fill of it is magenta.
+    elixir_left_trim: float = Field(default=0.14, ge=0.0, le=0.5)
+    elixir_column_fill: float = Field(default=0.30, ge=0.0, le=1.0)
+
     def cache_root(self) -> Path:
         """Versioned template-cache root: ``template_cache_dir/<CACHE_VERSION>``."""
         return self.template_cache_dir / CACHE_VERSION
@@ -180,6 +196,9 @@ def get_analyzer_settings() -> AnalyzerSettings:
         frame_keep_existing=_env_bool("ANALYZER_KEEP_FRAMES", False),
         calibration_profiles_dir=_env_path(
             "ANALYZER_PROFILES_DIR", _PROJECT_ROOT / "analyzer" / "calibration" / "profiles"
+        ),
+        timer_templates_dir=_env_path(
+            "ANALYZER_TIMER_TEMPLATES_DIR", _PROJECT_ROOT / "analyzer" / "assets" / "timer_digits"
         ),
         active_profile=os.getenv("ANALYZER_PROFILE", "default"),
         play_stability_frames=int(os.getenv("ANALYZER_PLAY_STABILITY_FRAMES", "2")),

@@ -69,10 +69,10 @@
     },
     "timer": {
       "name": "timer",
-      "x": 0.78,
-      "y": 0.055,
-      "w": 0.2,
-      "h": 0.035
+      "x": 0.815,
+      "y": 0.188,
+      "w": 0.15,
+      "h": 0.032
     },
     "elixir_self": {
       "name": "elixir_self",
@@ -132,5 +132,5 @@
     }
   },
   "is_placeholder": false,
-  "notes": "Player hand slots measured+ORB-validated. Opponent hand slots measured (replay view). Arena/timer/elixir/towers estimated pending 2F/2G."
+  "notes": "Player hand slots + timer measured/validated. Elixir bars validated (fill-count). Opp hand slots measured. Arena/towers estimated (2F deferred)."
 }

@@ -18,15 +18,16 @@ from analyzer.models import (
     AnalyzerMetrics,
     GameEvent,
     GameplayAnalysis,
+    MatchState,
     PlayEvent,
     ReconstructedDeck,
 )
+from analyzer.tracking.match_state import nearest_index
 
 logger = logging.getLogger(__name__)
 
 _PENDING_WARNING = (
-    "lane detection (2F) and match context (2G) not yet implemented - "
-    "lane/context are null pending real footage"
+    "lane detection (2F) not yet implemented - lane is null pending real footage"
 )
 
 
@@ -47,12 +48,14 @@ class EventBuilder:
         sample_fps: float,
         frame_count: int,
         profile_name: str,
+        match_states: list[MatchState] | None = None,
         player_deck: ReconstructedDeck | None = None,
         opponent_deck: ReconstructedDeck | None = None,
         metrics: AnalyzerMetrics | None = None,
         extra_warnings: list[str] | None = None,
     ) -> GameplayAnalysis:
         """Assemble a :class:`GameplayAnalysis` from confirmed play events + decks."""
+        states = match_states or []
         events: list[GameEvent] = []
         for seq, play in enumerate(play_events):
             events.append(
@@ -66,6 +69,8 @@ class EventBuilder:
                     variant=play.variant,
                     slot=play.slot,
                     confidence=play.score,
+                    # Reference the nearest match-state snapshot (2G) by index.
+                    match_state_ref=nearest_index(states, play.timestamp_seconds),
                 )
             )
         warnings = [_PENDING_WARNING, *(extra_warnings or [])]
@@ -78,6 +83,7 @@ class EventBuilder:
             frame_count=frame_count,
             profile_name=profile_name,
             events=events,
+            match_states=states,
             warnings=warnings,
             generated_at=datetime.now(timezone.utc),
             player_deck=player_deck,

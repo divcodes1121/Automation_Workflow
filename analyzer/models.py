@@ -299,9 +299,56 @@ class AnalyzerMetrics(BaseModel):
     matching_method: str
 
 
+# -- 2G Match state (timer / elixir / crowns) -------------------------------- #
+
+
+class MatchPhase(StrEnum):
+    """The tempo phase of a Clash Royale match.
+
+    Detected from signals we can read reliably: the timer background turns RED in
+    overtime (a clean colour signal), while regulation stays dark. ``UNKNOWN`` is
+    used when the timer is unreadable on a frame.
+    """
+
+    REGULATION = "regulation"
+    OVERTIME = "overtime"
+    UNKNOWN = "unknown"
+
+
+class MatchState(BaseModel):
+    """A snapshot of the scoreboard-level match context at one instant.
+
+    These form a **timeline** (``GameplayAnalysis.match_states``) sampled roughly
+    once per second; each :class:`GameEvent` references the nearest entry by index
+    (``match_state_ref``) rather than duplicating the context on every event.
+
+    Fields are optional/None when their detector could not read that frame (e.g.
+    the timer during the red-on-red overtime endgame, or crowns which are not yet
+    detected) -- honest gaps over fabricated values.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0)  # position in the timeline (the ref target)
+    timestamp_seconds: float = Field(ge=0)
+    source_frame: int = Field(ge=0)
+    time_remaining: str | None = None  # "M:SS" as shown on the clock
+    time_remaining_seconds: int | None = Field(default=None, ge=0)
+    phase: MatchPhase = MatchPhase.UNKNOWN
+    # Elixir generation rate: 1x, 2x (regulation final minute + overtime). 3x is
+    # not claimed without a dedicated signal (left None rather than guessed).
+    elixir_multiplier: int | None = Field(default=None, ge=1, le=3)
+    player_elixir: int | None = Field(default=None, ge=0, le=10)
+    opponent_elixir: int | None = Field(default=None, ge=0, le=10)
+    # Crowns require tower-destruction detection (CrownDetector, deferred) -> None.
+    player_crowns: int | None = Field(default=None, ge=0, le=3)
+    opponent_crowns: int | None = Field(default=None, ge=0, le=3)
+    timer_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 # -- 2H Event builder / final artifact --------------------------------------- #
 
-GAMEPLAY_ANALYSIS_SCHEMA_VERSION = "1.1"
+GAMEPLAY_ANALYSIS_SCHEMA_VERSION = "1.2"
 
 
 class GameEvent(BaseModel):
@@ -318,8 +365,12 @@ class GameEvent(BaseModel):
     variant: str | None = None
     slot: int = Field(ge=1, le=4)
     confidence: float | None = None
-    # Filled by later slices (2F arena lane, 2G match context).
+    # Filled by later slices (2F arena lane).
     lane: str | None = None
+    # Index into GameplayAnalysis.match_states of the nearest state (2G), or None
+    # if no timeline exists. Referenced, not embedded, to avoid duplicating the
+    # match context across dozens of events.
+    match_state_ref: int | None = Field(default=None, ge=0)
     context: dict | None = None
     notes: str | None = None
 
@@ -338,6 +389,9 @@ class GameplayAnalysis(BaseModel):
     frame_count: int = Field(ge=0)
     profile_name: str
     events: list[GameEvent]
+    # Match-state timeline (2G): ~1 snapshot/sec of timer/phase/elixir. Events
+    # point into this list via ``match_state_ref``.
+    match_states: list[MatchState] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime
     # Reconstructed decks (2I) + run metrics.
