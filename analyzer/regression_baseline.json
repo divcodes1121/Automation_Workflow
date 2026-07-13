@@ -1,0 +1,84 @@
+{
+  "profile": "iphone_16_pro_max",
+  "sample_fps": 1.0,
+  "games": {
+    "game_01": {
+      "player_deck": [
+        "dart-goblin",
+        "goblins",
+        "rascals",
+        "rocket",
+        "royal-ghost",
+        "skeleton-barrel",
+        "suspicious-bush",
+        "the-log"
+      ],
+      "opponent_deck": [
+        "barbarian-barrel",
+        "cannon-cart",
+        "fireball",
+        "minion-horde",
+        "mortar",
+        "rascals",
+        "skeleton-barrel",
+        "skeletons"
+      ],
+      "player_confidence": 0.931,
+      "opponent_confidence": 0.946,
+      "identify_rate": 0.913,
+      "event_count": 62
+    },
+    "game_02": {
+      "player_deck": [
+        "dart-goblin",
+        "goblins",
+        "rascals",
+        "rocket",
+        "royal-ghost",
+        "skeleton-barrel",
+        "suspicious-bush",
+        "the-log"
+      ],
+      "opponent_deck": [
+        "dart-goblin",
+        "goblins",
+        "rascals",
+        "rocket",
+        "royal-ghost",
+        "skeleton-barrel",
+        "suspicious-bush",
+        "the-log"
+      ],
+      "player_confidence": 0.974,
+      "opponent_confidence": 1.0,
+      "identify_rate": 0.928,
+      "event_count": 60
+    },
+    "game_03": {
+      "player_deck": [
+        "dart-goblin",
+        "goblins",
+        "rascals",
+        "rocket",
+        "royal-ghost",
+        "skeleton-barrel",
+        "suspicious-bush",
+        "the-log"
+      ],
+      "opponent_deck": [
+        "bats",
+        "cannon",
+        "executioner",
+        "hog-rider",
+        "knight",
+        "lightning",
+        "musketeer",
+        "the-log"
+      ],
+      "player_confidence": 0.911,
+      "opponent_confidence": 0.906,
+      "identify_rate": 0.902,
+      "event_count": 28
+    }
+  }
+}

@@ -351,6 +351,29 @@ def analyze(
     raise typer.Exit(code=ExitCode.SUCCESS)
 
 
+@app.command(name="regression")
+def regression(
+    run: bool = typer.Option(
+        True, "--run/--no-run",
+        help="Re-analyze the videos (--run) or check existing analysis JSONs (--no-run).",
+    ),
+    update_baseline: bool = typer.Option(
+        False, "--update-baseline", help="Write the baseline from the current results."
+    ),
+) -> None:
+    """Verify the frozen deck engine hasn't regressed on the 3 validated matches."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from analyzer.regression import run_regression
+
+    try:
+        passed, report = run_regression(run=run, update=update_baseline)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Regression setup error:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.VIDEO_NOT_FOUND)
+    console.print(report)
+    raise typer.Exit(code=ExitCode.SUCCESS if passed else ExitCode.BUILD_ERROR)
+
+
 @app.command(name="completeness")
 def completeness() -> None:
     """Report whether the template library covers the game's cards (2I+)."""
