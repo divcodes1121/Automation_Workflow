@@ -172,10 +172,10 @@ class HighlightEditor:
             try:
                 engine = EffectsEngine()
                 width, height = self._probe_dims(video)
-                for i, clip in enumerate(plan.clips):
-                    chains[i] = engine.chain_for(clip).replace(
-                        "{W}", str(width)
-                    ).replace("{H}", str(height))
+                # Seed the variant cycling from the video so it's reproducible
+                # yet differs across matches.
+                seed = engine.stable_seed(Path(plan.video).stem)
+                chains = engine.plan_chains(plan.clips, width, height, seed=seed)
             except EffectsError as exc:
                 raise HighlightError(f"effects engine: {exc}") from exc
 

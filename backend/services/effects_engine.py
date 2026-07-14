@@ -1,28 +1,32 @@
-"""Effects Engine (Phase 4, slice 1): apply data-driven edit recipes to clips.
+"""Effects Engine / Editing Language (Phase 4): data-driven, VARIED edits.
 
-The editor never hardcodes "Rocket gets a zoom" — it asks this engine what
-recipe a clip's ROLE maps to, and the engine compiles that recipe into an
-FFmpeg filter chain appended to the clip's video stream. Recipes live in
-``backend/recipes/highlight_effects.json`` (pure data): restyling a reel — or
-adding a Hog/Miner/Graveyard archetype later — means editing JSON, not code.
+The editor never hardcodes "Rocket gets a zoom". Each clip has a ROLE
+(hook/beat/flash/hero/victory); a role maps to a *list* of recipe VARIANTS in
+``backend/recipes/highlight_effects.json`` (pure data). :meth:`plan_chains`
+cycles through a role's variants — seeded per video — so repeated beats (e.g.
+four Rockets) each get a different edit ON PURPOSE, while the hook stays grand
+and the hero stays the payoff. This is the "controlled variation" that separates
+a crafted edit from a preset applied on repeat.
 
-Slice-1 primitive set (all pure FFmpeg, no external assets beyond the bundled
-font): ``zoom`` (punch-in), ``shake`` (camera jitter), ``flash`` (impact
-brightness pulse), ``callout`` (big pop-text from the clip's label). Freeze
-frames, speed ramps, rewinds and SFX are later slices — SFX additionally needs
-sourced copyright-free audio assets.
+Selection (editorial context) lives here; a chosen recipe is *compiled* into an
+FFmpeg filter chain by :meth:`_compile`. A STYLE PACK (Esports / Meme /
+Cinematic) is simply a different recipe file: ``EffectsEngine(recipes_path=...)``.
 
-Timing model: every effect fires at ``offset`` seconds relative to the clip's
-IMPACT ANCHOR. For card plays the anchor is the event moment plus a small lag
-(the recorded timestamp trails the placement, and the payoff — e.g. the Rocket
-explosion — lands shortly after); for phase flashes it is the phase moment;
-for the victory clip it is just after the cut.
+Primitive set (pure FFmpeg, only the bundled font as an asset): ``zoom``
+(punch-in), ``shake`` (jitter, needs a zoom for margin), ``flash`` (brightness
+pulse), ``callout`` (pop-text). Freeze frames, speed ramps, rewinds and SFX are
+later slices — SFX also needs sourced copyright-free audio.
+
+Timing: every effect fires at ``offset`` seconds from the clip's IMPACT ANCHOR
+(card plays: event moment + payoff lag; phase flashes: the phase moment;
+victory: just after the cut).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -50,9 +54,9 @@ class EffectsEngine:
 
     def __init__(self, recipes_path: Path | None = None) -> None:
         self._recipes_path = recipes_path or _RECIPES_PATH
-        self._recipes, self._role_recipes = self._load()
+        self._recipes, self._role_variants = self._load()
 
-    def _load(self) -> tuple[dict[str, Any], dict[str, str]]:
+    def _load(self) -> tuple[dict[str, Any], dict[str, list[str]]]:
         if not self._recipes_path.is_file():
             raise EffectsError(f"effects recipe file not found: {self._recipes_path}")
         try:
@@ -60,17 +64,53 @@ class EffectsEngine:
         except ValueError as exc:
             raise EffectsError(f"invalid effects recipe JSON: {exc}") from exc
         recipes = data.get("recipes") or {}
-        role_recipes = data.get("role_recipes") or {}
-        if not recipes or not role_recipes:
-            raise EffectsError("effects recipe file needs 'recipes' and 'role_recipes'")
-        return recipes, role_recipes
+        role_variants = data.get("role_variants") or {}
+        if not recipes or not role_variants:
+            raise EffectsError("effects recipe file needs 'recipes' and 'role_variants'")
+        return recipes, role_variants
 
     # -- Public API ----------------------------------------------------------- #
 
-    def chain_for(self, clip: HighlightClip) -> str:
-        """FFmpeg filter snippet (prefixed with ',') for this clip, or ''."""
-        recipe_name = self._role_recipes.get(clip.role.value)
-        recipe = self._recipes.get(recipe_name or "")
+    def plan_chains(
+        self,
+        clips: list[HighlightClip],
+        width: int,
+        height: int,
+        *,
+        seed: int = 0,
+    ) -> dict[int, str]:
+        """Select + compile a filter chain per clip, with controlled variation.
+
+        For each ROLE the variants are cycled through in order (offset by
+        ``seed`` so different videos differ), so repeated beats never look
+        identical. Returns ``{clip_index: ffmpeg_chain}`` with dimensions
+        already substituted.
+        """
+        role_position: dict[str, int] = {}
+        chains: dict[int, str] = {}
+        for i, clip in enumerate(clips):
+            role = clip.role.value
+            variants = self._role_variants.get(role) or []
+            if not variants:
+                chains[i] = ""
+                continue
+            pos = role_position.get(role, 0)
+            role_position[role] = pos + 1
+            recipe_name = variants[(seed + pos) % len(variants)]
+            recipe = self._recipes.get(recipe_name)
+            chain = self._compile(clip, recipe) if recipe else ""
+            chains[i] = chain.replace("{W}", str(width)).replace("{H}", str(height))
+        return chains
+
+    @staticmethod
+    def stable_seed(text: str) -> int:
+        """A deterministic per-video seed so variation is reproducible."""
+        return zlib.crc32(text.encode("utf-8"))
+
+    # -- Compilation ---------------------------------------------------------- #
+
+    def _compile(self, clip: HighlightClip, recipe: dict[str, Any]) -> str:
+        """FFmpeg filter snippet (prefixed with ',') for one clip+recipe, or ''."""
         if not recipe:
             return ""
         anchor = self._anchor(clip)
@@ -98,7 +138,7 @@ class EffectsEngine:
             elif etype == "shake":
                 pass  # folded into the zoom/crop below
             else:
-                logger.warning("Unknown effect type %r in recipe %r", etype, recipe_name)
+                logger.warning("Unknown effect type %r in a recipe", etype)
 
         # zoom (+ optional shake jitter inside the zoom margin) as one
         # scale+crop pair. Shake without zoom has no margin -> skipped.
