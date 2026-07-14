@@ -12,10 +12,13 @@ Selection (editorial context) lives here; a chosen recipe is *compiled* into an
 FFmpeg filter chain by :meth:`_compile`. A STYLE PACK (Esports / Meme /
 Cinematic) is simply a different recipe file: ``EffectsEngine(recipes_path=...)``.
 
-Primitive set (pure FFmpeg, only the bundled font as an asset): ``zoom``
-(punch-in), ``shake`` (jitter, needs a zoom for margin), ``flash`` (brightness
-pulse), ``callout`` (pop-text). Freeze frames, speed ramps, rewinds and SFX are
-later slices — SFX also needs sourced copyright-free audio.
+Primitive set: in-clip FFmpeg filters — ``zoom`` (punch-in), ``shake`` (jitter,
+needs a zoom for margin), ``flash`` (brightness pulse), ``callout`` (pop-text);
+plus two renderer-level cues that :meth:`plan_chains` returns alongside the
+chains — ``sfx`` (a meme sound mixed OVER the game audio) and ``meme`` (a
+meme-video INTERRUPT: the game freezes on its last frame while the meme plays
+over/instead of it, then the reel resumes). Speed ramps and rewinds are later
+slices.
 
 Timing: every effect fires at ``offset`` seconds from the clip's IMPACT ANCHOR
 (card plays: event moment + payoff lag; phase flashes: the phase moment;
@@ -38,6 +41,9 @@ logger = logging.getLogger(__name__)
 _RECIPES_PATH = Path(__file__).resolve().parents[1] / "recipes" / "highlight_effects.json"
 _FONT_PATH = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "NotoSans-Bold.ttf"
 _SFX_DIR = Path(__file__).resolve().parents[2] / "Memes" / "SFX"
+_MEME_DIR = Path(__file__).resolve().parents[2] / "Memes" / "IMGS"
+
+_DEFAULT_MEME_DURATION_S = 2.8  # a meme interrupt stays punchy
 
 
 @dataclass(frozen=True)
@@ -48,12 +54,38 @@ class SfxCue:
     position_seconds: float  # where in the FINAL reel timeline it starts
     volume: float
 
+
+@dataclass(frozen=True)
+class MemeCue:
+    """A meme-video INTERRUPT spliced into the reel right after a clip.
+
+    The game freezes on ``freeze_at_seconds`` (the clip's last source frame) for
+    ``duration`` seconds while the meme plays with its own audio. ``mode`` picks
+    the treatment: ``subject`` AI-mats the subject (background removed) over the
+    frozen frame — works on any clip with a separable subject; ``overlay``
+    chroma-keys the subject over the frozen frame (fast, for real green/white
+    screens); ``cutaway`` replaces the whole frame. Key params are only used by
+    ``overlay``; ``fps`` only by ``subject``.
+    """
+
+    file: Path
+    mode: str  # "subject" | "overlay" | "cutaway"
+    after_index: int          # splice in right after this clip
+    freeze_at_seconds: float  # source time of the frame to hold behind an overlay
+    duration: float
+    volume: float
+    key_color: str = "white"
+    similarity: float = 0.12
+    blend: float = 0.08
+    fps: float = 15.0  # matte frame rate for 'subject' mode
+
 # Seconds between a play's recorded timestamp and its visible payoff (the
 # recorded event trails the real placement; the impact lands just after).
 _IMPACT_LAG_S = 1.3
 _VICTORY_ANCHOR_S = 0.4  # anchor just after the cut to the end screen
 _CALLOUT_FONT_SIZE = 150
 _CALLOUT_Y_FRAC = 0.18   # vertical position of pop text (fraction of height)
+_CALLOUT_FADE_S = 0.10   # opacity fade-in for a caption
 
 
 class EffectsError(ValueError):
@@ -65,9 +97,16 @@ class EffectsEngine:
 
     def __init__(self, recipes_path: Path | None = None) -> None:
         self._recipes_path = recipes_path or _RECIPES_PATH
-        self._recipes, self._role_variants, self._sfx_library = self._load()
+        (
+            self._recipes,
+            self._role_variants,
+            self._sfx_library,
+            self._meme_library,
+        ) = self._load()
 
-    def _load(self) -> tuple[dict[str, Any], dict[str, list[str]], dict[str, list[str]]]:
+    def _load(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, list[str]], dict[str, list[str]], dict[str, Any]]:
         if not self._recipes_path.is_file():
             raise EffectsError(f"effects recipe file not found: {self._recipes_path}")
         try:
@@ -78,7 +117,12 @@ class EffectsEngine:
         role_variants = data.get("role_variants") or {}
         if not recipes or not role_variants:
             raise EffectsError("effects recipe file needs 'recipes' and 'role_variants'")
-        return recipes, role_variants, data.get("sfx_library") or {}
+        return (
+            recipes,
+            role_variants,
+            data.get("sfx_library") or {},
+            data.get("meme_library") or {},
+        )
 
     # -- Public API ----------------------------------------------------------- #
 
@@ -89,18 +133,22 @@ class EffectsEngine:
         height: int,
         *,
         seed: int = 0,
-    ) -> tuple[dict[int, str], list[SfxCue]]:
-        """Select + compile per-clip video chains and collect SFX cues.
+        memes: bool = True,
+    ) -> tuple[dict[int, str], list[SfxCue], list[MemeCue]]:
+        """Select + compile per-clip video chains and collect SFX + meme cues.
 
         For each ROLE the variants are cycled (offset by ``seed`` so different
         videos differ), so repeated beats never look identical. Returns
-        ``({clip_index: ffmpeg_chain}, [SfxCue, ...])`` with dimensions already
-        substituted; SFX cues carry their absolute position in the final reel.
+        ``({clip_index: ffmpeg_chain}, [SfxCue, ...], [MemeCue, ...])`` with
+        dimensions already substituted; SFX cues carry their absolute position in
+        the (pre-meme) reel timeline and meme cues carry the clip they follow.
+        The renderer shifts SFX past any spliced-in memes.
         """
         role_position: dict[str, int] = {}
         sfx_position: dict[str, int] = {}
         chains: dict[int, str] = {}
         cues: list[SfxCue] = []
+        meme_cues: list[MemeCue] = []
         reel_offset = 0.0
         for i, clip in enumerate(clips):
             role = clip.role.value
@@ -113,12 +161,54 @@ class EffectsEngine:
                     chain = self._compile(clip, recipe)
                     chains[i] = chain.replace("{W}", str(width)).replace("{H}", str(height))
                     cues.extend(self._sfx_cues(clip, recipe, reel_offset, seed, sfx_position))
+                    if memes:
+                        meme_cues.extend(self._meme_cues(clip, recipe, i))
                 else:
                     chains[i] = ""
             else:
                 chains[i] = ""
             reel_offset += clip.duration_seconds
-        return chains, cues
+        return chains, cues, meme_cues
+
+    def _meme_cues(
+        self, clip: HighlightClip, recipe: dict[str, Any], clip_index: int
+    ) -> list[MemeCue]:
+        """Resolve a recipe's ``meme`` effects into positioned interrupt cues."""
+        cues: list[MemeCue] = []
+        for effect in recipe.get("effects", []):
+            if effect.get("type") != "meme":
+                continue
+            asset = str(effect.get("asset", ""))
+            entry = self._meme_library.get(asset)
+            if not entry:
+                logger.warning("No meme asset %r in meme_library", asset)
+                continue
+            path = _MEME_DIR / str(entry.get("file", ""))
+            if not path.is_file():
+                logger.warning("Meme file missing: %s", path)
+                continue
+            mode = str(entry.get("mode", "cutaway"))
+            if mode not in ("subject", "overlay", "cutaway"):
+                logger.warning("Meme %r has unknown mode %r; skipping", asset, mode)
+                continue
+            duration = float(
+                effect.get("duration", entry.get("max_duration", _DEFAULT_MEME_DURATION_S))
+            )
+            cues.append(
+                MemeCue(
+                    file=path,
+                    mode=mode,
+                    after_index=clip_index,
+                    freeze_at_seconds=clip.source_end_seconds,
+                    duration=duration,
+                    volume=float(entry.get("volume", 1.0)),
+                    key_color=str(entry.get("key_color", "white")),
+                    similarity=float(entry.get("similarity", 0.12)),
+                    blend=float(entry.get("blend", 0.08)),
+                    fps=float(entry.get("fps", 15.0)),
+                )
+            )
+        return cues
 
     def _sfx_cues(
         self,
@@ -182,9 +272,19 @@ class EffectsEngine:
                 )
             elif etype == "callout":
                 text = str(effect.get("text", "{label}")).replace("{label}", clip.label)
-                filters.append(self._callout(text, start, end))
-            elif etype in ("shake", "sfx"):
-                pass  # shake folds into the zoom/crop below; sfx is audio (separate)
+                filters.append(
+                    self._callout(
+                        text, start, end,
+                        animation=str(effect.get("animation", "pop")),
+                        color=str(effect.get("color", "white")),
+                        base_size=effect.get("size"),
+                        y_frac=effect.get("y"),
+                    )
+                )
+            elif etype in ("shake", "sfx", "meme"):
+                # shake folds into the zoom/crop below; sfx is audio and meme is
+                # a spliced interrupt — both handled outside _compile.
+                pass
             else:
                 logger.warning("Unknown effect type %r in a recipe", etype)
 
@@ -231,23 +331,60 @@ class EffectsEngine:
         return _clamp(event_in_clip + _IMPACT_LAG_S, 0.0, clip.duration_seconds)
 
     @staticmethod
-    def _callout(text: str, start: float, end: float) -> str:
+    def _callout(
+        text: str,
+        start: float,
+        end: float,
+        *,
+        animation: str = "pop",
+        color: str = "white",
+        base_size: int | None = None,
+        y_frac: float | None = None,
+    ) -> str:
+        """A bold animated caption (drawtext) — the hyper-gaming style's #1 pillar.
+
+        ``animation`` drives entrance motion, all via per-frame drawtext
+        expressions (no extra layers): ``pop``/``punch`` scale-overshoot in
+        (this ffmpeg animates ``fontsize`` over ``t``), ``slide`` eases in from
+        the right, ``rise`` eases up from below, ``fade`` just opacity-fades.
+        ``color`` is any ffmpeg colour (name or ``0xRRGGBB``).
+        """
         if not _FONT_PATH.is_file():
             raise EffectsError(f"bundled callout font not found: {_FONT_PATH}")
         # RELATIVE path, no drive colon: this ffmpeg build's filter parser
         # splits on ':' even inside quotes (same Windows gotcha 8B hit), so the
         # renderer runs ffmpeg with cwd = project root and this resolves there.
         font = "assets/fonts/NotoSans-Bold.ttf"
-        fade = 0.12
-        # Plain comma is safe here: the surrounding single quotes protect it at
-        # graph-parse level (same pattern as enable='between(t,a,b)').
-        alpha = f"min(1,(t-{start:.3f})/{fade})"
+        s = float(start)
+        base = int(base_size or _CALLOUT_FONT_SIZE)
+        yf = float(y_frac if y_frac is not None else _CALLOUT_Y_FRAC)
+        target_y = f"h*{yf:.3f}"
+        center_x = "(w-text_w)/2"
+        # Plain commas are safe inside the single-quoted arg values below (same
+        # pattern as enable='between(t,a,b)').
+        alpha = f"min(1,(t-{s:.3f})/{_CALLOUT_FADE_S})"
+        fontsize, x_expr, y_expr = str(base), center_x, target_y
+
+        if animation in ("pop", "punch"):
+            din = 0.22 if animation == "punch" else 0.30
+            # Ease-out-back overshoot: f(0)=0, f(1)=1, peaks ~1.1-1.15 between.
+            over = 2.4 if animation == "punch" else 1.70158
+            p = f"clip((t-{s:.3f})/{din},0,1)"
+            scale = f"(1+{over + 1:.5f}*pow({p}-1,3)+{over:.5f}*pow({p}-1,2))"
+            fontsize = f"max(8,{base}*{scale})"
+        elif animation == "slide":
+            po = f"(1-pow(1-clip((t-{s:.3f})/0.35,0,1),3))"  # ease-out cubic
+            x_expr = f"(w+({center_x}-(w))*{po})"            # from off-right to centre
+        elif animation == "rise":
+            po = f"(1-pow(1-clip((t-{s:.3f})/0.35,0,1),3))"
+            y_expr = f"(h+({target_y}-(h))*{po})"            # from below to target
+
         return (
             f"drawtext=fontfile={font}:text='{text}'"
-            f":fontsize={_CALLOUT_FONT_SIZE}:fontcolor=white"
-            f":borderw=10:bordercolor=black"
-            f":x=(w-text_w)/2:y=h*{_CALLOUT_Y_FRAC}"
-            f":alpha='{alpha}':enable='between(t,{start:.3f},{end:.3f})'"
+            f":fontsize='{fontsize}':fontcolor={color}"
+            f":borderw=12:bordercolor=black:shadowcolor=black@0.5:shadowx=4:shadowy=4"
+            f":x='{x_expr}':y='{y_expr}'"
+            f":alpha='{alpha}':enable='between(t,{s:.3f},{end:.3f})'"
         )
 
 

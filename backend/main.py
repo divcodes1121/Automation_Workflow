@@ -1791,6 +1791,10 @@ def highlight(
         True, "--effects/--no-effects",
         help="Apply the role-based edit recipes (zoom/shake/flash/callouts).",
     ),
+    memes: bool = typer.Option(
+        True, "--memes/--no-memes",
+        help="Splice meme-video interrupts (freeze + overlay/cutaway); needs --effects.",
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Select + save the plan without rendering."
     ),
@@ -1815,7 +1819,9 @@ def highlight(
             raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)
         editor.save(plan)
         rendered = (
-            None if plan_only else editor.render(plan, video, output, effects=effects)
+            None
+            if plan_only
+            else editor.render(plan, video, output, effects=effects, memes=memes)
         )
     except HighlightError as exc:
         console.print(f"[bold red]Highlight failed:[/bold red] {exc}")

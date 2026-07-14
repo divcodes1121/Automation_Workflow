@@ -127,11 +127,15 @@ class HighlightEditor:
         output: Path | None = None,
         *,
         effects: bool = True,
+        memes: bool = True,
     ) -> Path:
         """Cut the planned windows from ``video`` and concat, keeping game audio.
 
         With ``effects`` (default), each clip additionally gets its role's edit
-        recipe (zoom/shake/flash/callout) from the Effects Engine.
+        recipe (zoom/shake/flash/callout) from the Effects Engine. With ``memes``
+        (default, and only when ``effects`` is on), a recipe's ``meme`` effect
+        splices a meme-video interrupt in after that clip — the game freezes while
+        the meme plays, then the reel resumes.
         """
         if not plan.clips:
             raise HighlightError("highlight plan has no clips to render")
@@ -144,7 +148,9 @@ class HighlightEditor:
         # callout's fontfile must be a RELATIVE, colon-free path (this ffmpeg's
         # filter parser splits on the drive ':' even inside quotes - the same
         # Windows gotcha the 8B subtitle burn hit).
-        argv = self._ffmpeg_argv(plan, video.resolve(), dest.resolve(), effects=effects)
+        argv = self._ffmpeg_argv(
+            plan, video.resolve(), dest.resolve(), effects=effects, memes=memes
+        )
 
         logger.info("Rendering highlight reel (%d clips) -> %s", plan.clip_count, dest)
         started = time.perf_counter()
@@ -161,28 +167,73 @@ class HighlightEditor:
         return dest
 
     def _ffmpeg_argv(
-        self, plan: HighlightPlan, video: Path, dest: Path, *, effects: bool = True
+        self,
+        plan: HighlightPlan,
+        video: Path,
+        dest: Path,
+        *,
+        effects: bool = True,
+        memes: bool = True,
     ) -> list[str]:
         """One filter_complex trim+concat over a single source; keeps V+A.
 
-        With effects, per-clip video chains come from the Editing Language and
-        meme SFX are mixed OVER the concatenated game audio (never replacing it).
+        With effects, per-clip video chains come from the Editing Language, meme
+        SFX are mixed OVER the concatenated game audio (never replacing it), and
+        meme-video interrupts (freeze + overlay/cutaway) are spliced between clips.
         """
         chains: dict[int, str] = {}
         sfx_cues: list = []
+        meme_cues: list = []
+        width, height, fps = self._probe_video(video)
         if effects:
             # Imported lazily; recipes are data in backend/recipes/.
             from backend.services.effects_engine import EffectsEngine, EffectsError
 
             try:
                 engine = EffectsEngine()
-                width, height = self._probe_dims(video)
                 # Seed the variant cycling from the video so it's reproducible
                 # yet differs across matches.
                 seed = engine.stable_seed(Path(plan.video).stem)
-                chains, sfx_cues = engine.plan_chains(plan.clips, width, height, seed=seed)
+                chains, sfx_cues, meme_cues = engine.plan_chains(
+                    plan.clips, width, height, seed=seed, memes=memes
+                )
             except EffectsError as exc:
                 raise HighlightError(f"effects engine: {exc}") from exc
+
+        # A meme interrupt inserts a whole segment into the concat, so its audio
+        # must share the meme files' format; normalise every clip's audio too.
+        norm = bool(meme_cues)
+        anorm = "aresample=48000,aformat=channel_layouts=stereo"
+
+        # Resolve each meme's input file. 'subject' memes are AI-matted first
+        # (background removed) into a cached alpha video, reused across cues.
+        meme_files: list[Path] = []
+        if any(c.mode == "subject" for c in meme_cues):
+            from backend.services.meme_matte import MemeMatteError, MemeMatteService
+
+            matter = MemeMatteService(self._settings)
+            for cue in meme_cues:
+                if cue.mode == "subject":
+                    try:
+                        meme_files.append(
+                            matter.matte(cue.file, duration=cue.duration, fps=cue.fps)
+                        )
+                    except MemeMatteError as exc:
+                        raise HighlightError(f"meme matte: {exc}") from exc
+                else:
+                    meme_files.append(cue.file)
+        else:
+            meme_files = [c.file for c in meme_cues]
+
+        inputs = ["-i", str(video)]
+        # Each meme cue is one extra input (indices 1..M), in cue order.
+        meme_input: dict[int, int] = {}
+        for j, cue in enumerate(meme_cues):
+            inputs += ["-i", str(meme_files[j])]
+            meme_input[j] = 1 + j
+        memes_after: dict[int, list[int]] = {}
+        for j, cue in enumerate(meme_cues):
+            memes_after.setdefault(cue.after_index, []).append(j)
 
         parts: list[str] = []
         labels: list[str] = []
@@ -190,27 +241,53 @@ class HighlightEditor:
             s, e = clip.source_start_seconds, clip.source_end_seconds
             fx = chains.get(i, "")
             parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS{fx}[v{i}]")
-            parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+            atail = f",{anorm}" if norm else ""
+            parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS{atail}[a{i}]")
             labels.append(f"[v{i}][a{i}]")
-        n = len(plan.clips)
+            for j in memes_after.get(i, []):
+                seg_parts, seg_label = self._meme_segment(
+                    j, meme_cues[j], meme_input[j], width, height, fps, anorm
+                )
+                parts.extend(seg_parts)
+                labels.append(seg_label)
+
+        n = len(plan.clips) + len(meme_cues)
         audio_out = "[gamea]" if sfx_cues else "[outa]"
         parts.append("".join(labels) + f"concat=n={n}:v=1:a=1[outv]{audio_out}")
 
-        inputs = ["-i", str(video)]
         if sfx_cues:
+            # SFX positions are in the PRE-meme reel timeline; a meme spliced in
+            # earlier pushes every later SFX back by its duration. Precompute the
+            # reel time at each clip's end to know which side of a splice a cue is.
+            clip_end_reel: list[float] = []
+            acc = 0.0
+            for c in plan.clips:
+                acc += c.duration_seconds
+                clip_end_reel.append(round(acc, 3))
+
+            def meme_shift(pos: float) -> float:
+                extra = 0.0
+                for cue in meme_cues:
+                    if pos >= clip_end_reel[cue.after_index] - 1e-6:
+                        extra += cue.duration
+                return extra
+
             # Each cue = one extra input, resampled to a common format, delayed to
-            # its reel position, and volume-scaled; then amix over the game audio
-            # (normalize=0 keeps game audio full) with a limiter to avoid clips.
-            parts.append("[gamea]aresample=48000,aformat=channel_layouts=stereo[game0]")
+            # its (shifted) reel position, and volume-scaled; then amix over the
+            # game audio (normalize=0 keeps game audio full) with a limiter.
+            parts.append(f"[gamea]{anorm}[game0]")
             mix_labels = ["[game0]"]
-            for k, cue in enumerate(sfx_cues, start=1):
+            sfx_start = 1 + len(meme_cues)
+            for off, cue in enumerate(sfx_cues):
+                idx = sfx_start + off
                 inputs += ["-i", str(cue.file)]
-                delay_ms = int(round(cue.position_seconds * 1000))
+                position = cue.position_seconds + meme_shift(cue.position_seconds)
+                delay_ms = int(round(position * 1000))
                 parts.append(
-                    f"[{k}:a]aresample=48000,aformat=channel_layouts=stereo,"
-                    f"volume={cue.volume:.2f},adelay={delay_ms}|{delay_ms}[s{k}]"
+                    f"[{idx}:a]{anorm},"
+                    f"volume={cue.volume:.2f},adelay={delay_ms}|{delay_ms}[s{idx}]"
                 )
-                mix_labels.append(f"[s{k}]")
+                mix_labels.append(f"[s{idx}]")
             parts.append(
                 "".join(mix_labels)
                 + f"amix=inputs={len(mix_labels)}:normalize=0:duration=first,"
@@ -227,8 +304,62 @@ class HighlightEditor:
             str(dest),
         ]
 
-    def _probe_dims(self, video: Path) -> tuple[int, int]:
-        """Source frame dimensions via ffprobe (needed by the effects crop)."""
+    def _meme_segment(
+        self,
+        j: int,
+        cue: Any,
+        midx: int,
+        width: int,
+        height: int,
+        fps: float,
+        anorm: str,
+    ) -> tuple[list[str], str]:
+        """FFmpeg parts for one meme interrupt; returns (parts, "[vmj][amj]").
+
+        ``subject`` overlays a pre-matted alpha video (AI background removal) over
+        a frozen game frame; ``overlay`` chroma-keys the subject over the frozen
+        frame; ``cutaway`` scales the meme to fill the canvas (letterboxed). The
+        meme's own audio plays during the interrupt.
+        """
+        d = cue.duration
+        vlabel, alabel = f"[vm{j}]", f"[am{j}]"
+        parts: list[str] = []
+        if cue.mode in ("subject", "overlay"):
+            ft = cue.freeze_at_seconds
+            # Hold a single game frame for the meme's length (the freeze).
+            parts.append(
+                f"[0:v]trim=start={ft:.3f}:end={ft + 0.05:.3f},setpts=PTS-STARTPTS,"
+                f"loop=loop=-1:size=1:start=0,fps={fps:g},"
+                f"trim=duration={d:.3f},setpts=PTS-STARTPTS[mbg{j}]"
+            )
+            if cue.mode == "subject":
+                # Input already carries alpha (background removed); just scale.
+                parts.append(
+                    f"[{midx}:v]trim=duration={d:.3f},setpts=PTS-STARTPTS,fps={fps:g},"
+                    f"scale={width}:-2[mfg{j}]"
+                )
+            else:  # overlay — key out the background live.
+                parts.append(
+                    f"[{midx}:v]trim=duration={d:.3f},setpts=PTS-STARTPTS,fps={fps:g},"
+                    f"scale={width}:-2,"
+                    f"colorkey=color={cue.key_color}:similarity={cue.similarity:.3f}"
+                    f":blend={cue.blend:.3f},despill=type=green:mix=1[mfg{j}]"
+                )
+            parts.append(f"[mbg{j}][mfg{j}]overlay=(W-w)/2:(H-h)/2,setsar=1{vlabel}")
+        else:  # cutaway — full-frame takeover, letterboxed to the canvas.
+            parts.append(
+                f"[{midx}:v]trim=duration={d:.3f},setpts=PTS-STARTPTS,fps={fps:g},"
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1{vlabel}"
+            )
+        parts.append(
+            f"[{midx}:a]atrim=duration={d:.3f},asetpts=PTS-STARTPTS,{anorm},"
+            f"volume={cue.volume:.2f}{alabel}"
+        )
+        return parts, f"{vlabel}{alabel}"
+
+    def _probe_video(self, video: Path) -> tuple[int, int, float]:
+        """Source width, height, fps via ffprobe (needed by effects + memes)."""
         import json as _json
 
         completed = subprocess.run(
@@ -240,9 +371,11 @@ class HighlightEditor:
         )
         try:
             stream = _json.loads(completed.stdout)["streams"][0]
-            return int(stream["width"]), int(stream["height"])
-        except (ValueError, KeyError, IndexError) as exc:
-            raise HighlightError(f"could not probe video dimensions: {video}") from exc
+            num, _, den = str(stream.get("r_frame_rate", "60/1")).partition("/")
+            fps = float(num) / float(den) if den and float(den) else float(num)
+            return int(stream["width"]), int(stream["height"]), fps
+        except (ValueError, KeyError, IndexError, ZeroDivisionError) as exc:
+            raise HighlightError(f"could not probe video: {video}") from exc
 
 
 # --------------------------------------------------------------------------- #
