@@ -163,8 +163,13 @@ class HighlightEditor:
     def _ffmpeg_argv(
         self, plan: HighlightPlan, video: Path, dest: Path, *, effects: bool = True
     ) -> list[str]:
-        """One filter_complex trim+concat over a single source; keeps V+A."""
+        """One filter_complex trim+concat over a single source; keeps V+A.
+
+        With effects, per-clip video chains come from the Editing Language and
+        meme SFX are mixed OVER the concatenated game audio (never replacing it).
+        """
         chains: dict[int, str] = {}
+        sfx_cues: list = []
         if effects:
             # Imported lazily; recipes are data in backend/recipes/.
             from backend.services.effects_engine import EffectsEngine, EffectsError
@@ -175,7 +180,7 @@ class HighlightEditor:
                 # Seed the variant cycling from the video so it's reproducible
                 # yet differs across matches.
                 seed = engine.stable_seed(Path(plan.video).stem)
-                chains = engine.plan_chains(plan.clips, width, height, seed=seed)
+                chains, sfx_cues = engine.plan_chains(plan.clips, width, height, seed=seed)
             except EffectsError as exc:
                 raise HighlightError(f"effects engine: {exc}") from exc
 
@@ -188,10 +193,33 @@ class HighlightEditor:
             parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
             labels.append(f"[v{i}][a{i}]")
         n = len(plan.clips)
-        parts.append("".join(labels) + f"concat=n={n}:v=1:a=1[outv][outa]")
+        audio_out = "[gamea]" if sfx_cues else "[outa]"
+        parts.append("".join(labels) + f"concat=n={n}:v=1:a=1[outv]{audio_out}")
+
+        inputs = ["-i", str(video)]
+        if sfx_cues:
+            # Each cue = one extra input, resampled to a common format, delayed to
+            # its reel position, and volume-scaled; then amix over the game audio
+            # (normalize=0 keeps game audio full) with a limiter to avoid clips.
+            parts.append("[gamea]aresample=48000,aformat=channel_layouts=stereo[game0]")
+            mix_labels = ["[game0]"]
+            for k, cue in enumerate(sfx_cues, start=1):
+                inputs += ["-i", str(cue.file)]
+                delay_ms = int(round(cue.position_seconds * 1000))
+                parts.append(
+                    f"[{k}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                    f"volume={cue.volume:.2f},adelay={delay_ms}|{delay_ms}[s{k}]"
+                )
+                mix_labels.append(f"[s{k}]")
+            parts.append(
+                "".join(mix_labels)
+                + f"amix=inputs={len(mix_labels)}:normalize=0:duration=first,"
+                "alimiter=limit=0.95[outa]"
+            )
+
         filtergraph = ";".join(parts)
         return [
-            self._settings.ffmpeg_path, "-y", "-i", str(video),
+            self._settings.ffmpeg_path, "-y", *inputs,
             "-filter_complex", filtergraph,
             "-map", "[outv]", "-map", "[outa]",
             "-c:v", "libx264", "-crf", str(_CRF), "-preset", "veryfast",

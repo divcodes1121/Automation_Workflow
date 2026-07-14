@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,16 @@ logger = logging.getLogger(__name__)
 
 _RECIPES_PATH = Path(__file__).resolve().parents[1] / "recipes" / "highlight_effects.json"
 _FONT_PATH = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "NotoSans-Bold.ttf"
+_SFX_DIR = Path(__file__).resolve().parents[2] / "Memes" / "SFX"
+
+
+@dataclass(frozen=True)
+class SfxCue:
+    """A meme sound to mix over the reel audio at a given reel position."""
+
+    file: Path
+    position_seconds: float  # where in the FINAL reel timeline it starts
+    volume: float
 
 # Seconds between a play's recorded timestamp and its visible payoff (the
 # recorded event trails the real placement; the impact lands just after).
@@ -54,9 +65,9 @@ class EffectsEngine:
 
     def __init__(self, recipes_path: Path | None = None) -> None:
         self._recipes_path = recipes_path or _RECIPES_PATH
-        self._recipes, self._role_variants = self._load()
+        self._recipes, self._role_variants, self._sfx_library = self._load()
 
-    def _load(self) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    def _load(self) -> tuple[dict[str, Any], dict[str, list[str]], dict[str, list[str]]]:
         if not self._recipes_path.is_file():
             raise EffectsError(f"effects recipe file not found: {self._recipes_path}")
         try:
@@ -67,7 +78,7 @@ class EffectsEngine:
         role_variants = data.get("role_variants") or {}
         if not recipes or not role_variants:
             raise EffectsError("effects recipe file needs 'recipes' and 'role_variants'")
-        return recipes, role_variants
+        return recipes, role_variants, data.get("sfx_library") or {}
 
     # -- Public API ----------------------------------------------------------- #
 
@@ -78,29 +89,66 @@ class EffectsEngine:
         height: int,
         *,
         seed: int = 0,
-    ) -> dict[int, str]:
-        """Select + compile a filter chain per clip, with controlled variation.
+    ) -> tuple[dict[int, str], list[SfxCue]]:
+        """Select + compile per-clip video chains and collect SFX cues.
 
-        For each ROLE the variants are cycled through in order (offset by
-        ``seed`` so different videos differ), so repeated beats never look
-        identical. Returns ``{clip_index: ffmpeg_chain}`` with dimensions
-        already substituted.
+        For each ROLE the variants are cycled (offset by ``seed`` so different
+        videos differ), so repeated beats never look identical. Returns
+        ``({clip_index: ffmpeg_chain}, [SfxCue, ...])`` with dimensions already
+        substituted; SFX cues carry their absolute position in the final reel.
         """
         role_position: dict[str, int] = {}
+        sfx_position: dict[str, int] = {}
         chains: dict[int, str] = {}
+        cues: list[SfxCue] = []
+        reel_offset = 0.0
         for i, clip in enumerate(clips):
             role = clip.role.value
             variants = self._role_variants.get(role) or []
-            if not variants:
+            if variants:
+                pos = role_position.get(role, 0)
+                role_position[role] = pos + 1
+                recipe = self._recipes.get(variants[(seed + pos) % len(variants)])
+                if recipe:
+                    chain = self._compile(clip, recipe)
+                    chains[i] = chain.replace("{W}", str(width)).replace("{H}", str(height))
+                    cues.extend(self._sfx_cues(clip, recipe, reel_offset, seed, sfx_position))
+                else:
+                    chains[i] = ""
+            else:
                 chains[i] = ""
+            reel_offset += clip.duration_seconds
+        return chains, cues
+
+    def _sfx_cues(
+        self,
+        clip: HighlightClip,
+        recipe: dict[str, Any],
+        reel_offset: float,
+        seed: int,
+        sfx_position: dict[str, int],
+    ) -> list[SfxCue]:
+        """Resolve a recipe's ``sfx`` effects into positioned reel cues."""
+        anchor = self._anchor(clip)
+        cues: list[SfxCue] = []
+        for effect in recipe.get("effects", []):
+            if effect.get("type") != "sfx":
                 continue
-            pos = role_position.get(role, 0)
-            role_position[role] = pos + 1
-            recipe_name = variants[(seed + pos) % len(variants)]
-            recipe = self._recipes.get(recipe_name)
-            chain = self._compile(clip, recipe) if recipe else ""
-            chains[i] = chain.replace("{W}", str(width)).replace("{H}", str(height))
-        return chains
+            category = str(effect.get("category", ""))
+            files = self._sfx_library.get(category) or []
+            if not files:
+                logger.warning("No SFX in category %r", category)
+                continue
+            # Rotate within the category (seeded) so repeats vary.
+            pos = sfx_position.get(category, 0)
+            sfx_position[category] = pos + 1
+            path = _SFX_DIR / files[(seed + pos) % len(files)]
+            if not path.is_file():
+                logger.warning("SFX file missing: %s", path)
+                continue
+            start = max(0.0, reel_offset + anchor + float(effect.get("offset", 0.0)))
+            cues.append(SfxCue(path, round(start, 3), float(effect.get("volume", 0.8))))
+        return cues
 
     @staticmethod
     def stable_seed(text: str) -> int:
@@ -135,8 +183,8 @@ class EffectsEngine:
             elif etype == "callout":
                 text = str(effect.get("text", "{label}")).replace("{label}", clip.label)
                 filters.append(self._callout(text, start, end))
-            elif etype == "shake":
-                pass  # folded into the zoom/crop below
+            elif etype in ("shake", "sfx"):
+                pass  # shake folds into the zoom/crop below; sfx is audio (separate)
             else:
                 logger.warning("Unknown effect type %r in a recipe", etype)
 
