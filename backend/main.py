@@ -1787,6 +1787,10 @@ def highlight(
     card: str = typer.Option(
         "rocket", "--card", help="The deck's signature win-condition card (story anchor)."
     ),
+    effects: bool = typer.Option(
+        True, "--effects/--no-effects",
+        help="Apply the role-based edit recipes (zoom/shake/flash/callouts).",
+    ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Select + save the plan without rendering."
     ),
@@ -1810,7 +1814,9 @@ def highlight(
             console.print("[bold red]No marquee moments found to highlight.[/bold red]")
             raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)
         editor.save(plan)
-        rendered = None if plan_only else editor.render(plan, video, output)
+        rendered = (
+            None if plan_only else editor.render(plan, video, output, effects=effects)
+        )
     except HighlightError as exc:
         console.print(f"[bold red]Highlight failed:[/bold red] {exc}")
         raise typer.Exit(code=ExitCode.HIGHLIGHT_ERROR)

@@ -120,8 +120,19 @@ class HighlightEditor:
 
     # -- Render (FFmpeg) ----------------------------------------------------- #
 
-    def render(self, plan: HighlightPlan, video: Path, output: Path | None = None) -> Path:
-        """Cut the planned windows from ``video`` and concat, keeping game audio."""
+    def render(
+        self,
+        plan: HighlightPlan,
+        video: Path,
+        output: Path | None = None,
+        *,
+        effects: bool = True,
+    ) -> Path:
+        """Cut the planned windows from ``video`` and concat, keeping game audio.
+
+        With ``effects`` (default), each clip additionally gets its role's edit
+        recipe (zoom/shake/flash/callout) from the Effects Engine.
+        """
         if not plan.clips:
             raise HighlightError("highlight plan has no clips to render")
         if not video.is_file():
@@ -129,11 +140,17 @@ class HighlightEditor:
 
         dest = output or self._settings.edited_dir / f"{video.stem}.highlight.mp4"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        argv = self._ffmpeg_argv(plan, video, dest)
+        # Absolute video/dest because ffmpeg runs with cwd = project root: the
+        # callout's fontfile must be a RELATIVE, colon-free path (this ffmpeg's
+        # filter parser splits on the drive ':' even inside quotes - the same
+        # Windows gotcha the 8B subtitle burn hit).
+        argv = self._ffmpeg_argv(plan, video.resolve(), dest.resolve(), effects=effects)
 
         logger.info("Rendering highlight reel (%d clips) -> %s", plan.clip_count, dest)
         started = time.perf_counter()
-        completed = subprocess.run(argv, capture_output=True, text=True)
+        completed = subprocess.run(
+            argv, capture_output=True, text=True, cwd=str(self._settings.project_root)
+        )
         elapsed = time.perf_counter() - started
         if completed.returncode != 0:
             tail = (completed.stderr or "").strip()[-2000:]
@@ -143,13 +160,31 @@ class HighlightEditor:
         )
         return dest
 
-    def _ffmpeg_argv(self, plan: HighlightPlan, video: Path, dest: Path) -> list[str]:
+    def _ffmpeg_argv(
+        self, plan: HighlightPlan, video: Path, dest: Path, *, effects: bool = True
+    ) -> list[str]:
         """One filter_complex trim+concat over a single source; keeps V+A."""
+        chains: dict[int, str] = {}
+        if effects:
+            # Imported lazily; recipes are data in backend/recipes/.
+            from backend.services.effects_engine import EffectsEngine, EffectsError
+
+            try:
+                engine = EffectsEngine()
+                width, height = self._probe_dims(video)
+                for i, clip in enumerate(plan.clips):
+                    chains[i] = engine.chain_for(clip).replace(
+                        "{W}", str(width)
+                    ).replace("{H}", str(height))
+            except EffectsError as exc:
+                raise HighlightError(f"effects engine: {exc}") from exc
+
         parts: list[str] = []
         labels: list[str] = []
         for i, clip in enumerate(plan.clips):
             s, e = clip.source_start_seconds, clip.source_end_seconds
-            parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]")
+            fx = chains.get(i, "")
+            parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS{fx}[v{i}]")
             parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
             labels.append(f"[v{i}][a{i}]")
         n = len(plan.clips)
@@ -163,6 +198,23 @@ class HighlightEditor:
             "-c:a", "aac", "-b:a", "192k",
             str(dest),
         ]
+
+    def _probe_dims(self, video: Path) -> tuple[int, int]:
+        """Source frame dimensions via ffprobe (needed by the effects crop)."""
+        import json as _json
+
+        completed = subprocess.run(
+            [
+                self._settings.ffprobe_path, "-v", "quiet", "-print_format", "json",
+                "-show_streams", "-select_streams", "v", str(video),
+            ],
+            capture_output=True, text=True,
+        )
+        try:
+            stream = _json.loads(completed.stdout)["streams"][0]
+            return int(stream["width"]), int(stream["height"])
+        except (ValueError, KeyError, IndexError) as exc:
+            raise HighlightError(f"could not probe video dimensions: {video}") from exc
 
 
 # --------------------------------------------------------------------------- #
