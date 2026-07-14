@@ -7,9 +7,12 @@ future hi-res rasterization) as the preview.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from asset_manager.sources.base import AssetSource, FetchResult
+from asset_manager.sources.base import AssetSource, FetchResult, SourceError
+
+logger = logging.getLogger(__name__)
 
 # jsDelivr mirror of jdecked/twemoji (fe0f variation selectors stripped).
 _PNG = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/{code}.png"
@@ -46,7 +49,11 @@ class TwemojiSource(AssetSource):
         for name, (code, extra) in _EMOJI.items():
             png = out_dir / f"{name}.png"
             svg = out_dir / f"{name}.svg"
-            self._download(_PNG.format(code=code), png)
+            try:
+                self._download(_PNG.format(code=code), png)
+            except SourceError as exc:
+                logger.warning("Emoji %r failed: %s", name, exc)
+                continue
             try:
                 self._download(_SVG.format(code=code), svg)
             except Exception:  # noqa: BLE001 — SVG is optional (preview only)

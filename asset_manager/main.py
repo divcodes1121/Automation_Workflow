@@ -68,11 +68,14 @@ def rebuild_manifest() -> None:
 @app.command()
 def resolve(
     name: str = typer.Argument(..., help="Symbolic name, e.g. emoji_fire / comic_boom."),
+    category: str = typer.Option(
+        None, "--category", "-c", help="Scope to a category prefix (e.g. audio)."
+    ),
     pick_random: bool = typer.Option(False, "--random", help="Pick randomly among matches."),
 ) -> None:
     """Resolve a symbolic name to a real asset path."""
     _log()
-    asset = AssetManager().resolve(name, pick_random=pick_random)
+    asset = AssetManager().resolve(name, category=category, pick_random=pick_random)
     if asset is None:
         typer.echo(f"No asset resolves '{name}'")
         raise typer.Exit(code=ExitCode.NOT_FOUND)

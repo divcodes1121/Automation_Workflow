@@ -1,9 +1,11 @@
 """Declared-but-not-yet-implemented source adapters (honest scaffolds).
 
 Each is registered so ``sync`` lists it and its licensing/key status is visible,
-but ``fetch`` raises until the per-source specifics are wired (pack/family/icon
-lists, API pagination). Keyless ones come next; keyed ones await user API keys.
-Implementing one = filling in its ``fetch`` — no manager or editor changes.
+but ``fetch`` raises until implemented. SVG Repo and OpenGameArt are DEFERRED:
+neither documents an official bulk/download API and their terms don't clearly
+permit automated downloading — Heroicons/Kenney/Twemoji cover the same needs.
+Keyed ones (Pixabay/Freesound/Tenor) await user API keys. Implementing one =
+filling in its ``fetch`` — no manager or editor changes.
 """
 
 from __future__ import annotations
@@ -21,25 +23,7 @@ class _PlannedSource(AssetSource):
         )
 
 
-# -- Keyless (implement next) ------------------------------------------------ #
-class GoogleFontsSource(_PlannedSource):
-    name = "google_fonts"
-    license_note = "Google Fonts (mostly OFL); font files from github.com/google/fonts"
-    requires_key = False
-
-
-class KenneySource(_PlannedSource):
-    name = "kenney"
-    license_note = "Kenney game assets, CC0; per-pack zip downloads from kenney.nl"
-    requires_key = False
-
-
-class HeroiconsSource(_PlannedSource):
-    name = "heroicons"
-    license_note = "Heroicons, MIT; SVGs from github.com/tailwindlabs/heroicons"
-    requires_key = False
-
-
+# -- Deferred: no official API and bulk-download permission unclear ---------- #
 class SvgRepoSource(_PlannedSource):
     name = "svgrepo"
     license_note = "SVG Repo (per-icon licenses vary; use only API/permitted downloads)"
@@ -65,13 +49,6 @@ class FreesoundSource(_PlannedSource):
     license_note = "Freesound (CC0/CC-BY per sound); official API (OAuth/token)"
     requires_key = True
     key_env = "FREESOUND_API_KEY"
-
-
-class GiphySource(_PlannedSource):
-    name = "giphy"
-    license_note = "GIPHY API (respect API terms)"
-    requires_key = True
-    key_env = "GIPHY_API_KEY"
 
 
 class TenorSource(_PlannedSource):

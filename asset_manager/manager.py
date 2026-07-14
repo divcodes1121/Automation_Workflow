@@ -18,12 +18,12 @@ from pathlib import Path
 
 from asset_manager.models import Asset, AssetManifest
 from asset_manager.sources.base import AssetSource, FetchResult, SourceError
+from asset_manager.sources.giphy import GiphySource
+from asset_manager.sources.google_fonts import GoogleFontsSource
+from asset_manager.sources.heroicons import HeroiconsSource
+from asset_manager.sources.kenney import KenneySource
 from asset_manager.sources.planned import (
     FreesoundSource,
-    GiphySource,
-    GoogleFontsSource,
-    HeroiconsSource,
-    KenneySource,
     OpenGameArtSource,
     PixabaySource,
     SvgRepoSource,
@@ -32,6 +32,15 @@ from asset_manager.sources.planned import (
 from asset_manager.sources.twemoji import TwemojiSource
 
 logger = logging.getLogger(__name__)
+
+# Keyed sources read their API keys from the environment; the project keeps
+# keys in the gitignored .env, so load it when available (best-effort).
+try:  # pragma: no cover - convenience only
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 # The full category tree (created on first sync). Sources write into these.
 _CATEGORIES = [
@@ -187,17 +196,22 @@ class AssetManager:
         finally:
             conn.close()
 
-    def resolve(self, symbolic: str, *, pick_random: bool = False) -> Asset | None:
+    def resolve(
+        self, symbolic: str, *, category: str | None = None, pick_random: bool = False
+    ) -> Asset | None:
         """Map a symbolic name (``emoji_fire``, ``comic_boom``) to an asset.
 
         The name is split into tokens; assets matching ALL tokens as tags win
         (deterministic by id, or random with ``pick_random``). If none match all,
         the best partial match (most tokens, category-prefix tiebreak) is used.
+        ``category`` scopes matching to a category prefix — the editor uses this
+        to keep e.g. SFX lookups inside ``audio/`` (tags collide across kinds:
+        a font can be tagged "impact" too).
         """
         tokens = [t for t in symbolic.strip().lower().replace("-", "_").split("_") if t]
         if not tokens:
             return None
-        exact = self.search(tokens, limit=100)
+        exact = self.search(tokens, category=category, limit=100)
         if exact:
             return random.choice(exact) if pick_random else exact[0]
 
@@ -206,6 +220,8 @@ class AssetManager:
         try:
             best: tuple[int, int, str] | None = None  # (matches, cat_bonus, id)
             for a in self._all_assets(conn):
+                if category and not a.category.startswith(category):
+                    continue
                 tagset = set(a.tags)
                 matches = sum(1 for t in tokens if t in tagset)
                 if matches == 0:
