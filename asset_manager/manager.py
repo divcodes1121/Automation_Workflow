@@ -22,6 +22,7 @@ from asset_manager.sources.giphy import GiphySource
 from asset_manager.sources.google_fonts import GoogleFontsSource
 from asset_manager.sources.heroicons import HeroiconsSource
 from asset_manager.sources.kenney import KenneySource
+from asset_manager.sources.local_memes import LocalMemesSource
 from asset_manager.sources.planned import (
     FreesoundSource,
     OpenGameArtSource,
@@ -72,6 +73,7 @@ class AssetManager:
         self._sources: dict[str, AssetSource] = {
             s.name: s
             for s in (
+                LocalMemesSource(),
                 TwemojiSource(),
                 GoogleFontsSource(), KenneySource(), HeroiconsSource(),
                 SvgRepoSource(), OpenGameArtSource(),
@@ -249,7 +251,8 @@ class AssetManager:
                 if self._sha256(fpath) != a.hash:
                     report["corrupt"].append(a.id)
                     self._delete(conn, a.id)
-                    fpath.unlink(missing_ok=True)
+                    if fpath.is_relative_to(self._root):  # never touch user files
+                        fpath.unlink(missing_ok=True)
                     continue
                 if a.hash in seen_hash:
                     report["duplicates"].append(f"{a.id} == {seen_hash[a.hash]}")
@@ -292,7 +295,10 @@ class AssetManager:
         ).fetchone()
         if dup:
             logger.info("Duplicate content, skipping %s (== %s)", r.id, dup[0])
-            r.path.unlink(missing_ok=True)
+            # Only remove OUR extracted copy — never a user-managed file that
+            # merely registers from outside the assets/ tree (e.g. Memes/).
+            if r.path.is_relative_to(self._root):
+                r.path.unlink(missing_ok=True)
             return 0
 
         preview_rel = None

@@ -38,10 +38,13 @@ from backend.models import HighlightClip, HighlightRole
 
 logger = logging.getLogger(__name__)
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RECIPES_PATH = Path(__file__).resolve().parents[1] / "recipes" / "highlight_effects.json"
-_FONT_PATH = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "NotoSans-Bold.ttf"
-_SFX_DIR = Path(__file__).resolve().parents[2] / "Memes" / "SFX"
-_MEME_DIR = Path(__file__).resolve().parents[2] / "Memes" / "IMGS"
+_FONT_PATH = _PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Bold.ttf"
+# Legacy fallback dirs: recipe entries that are literal filenames (contain a
+# '.') resolve here; symbolic entries resolve via the AssetManager instead.
+_SFX_DIR = _PROJECT_ROOT / "Memes" / "SFX"
+_MEME_DIR = _PROJECT_ROOT / "Memes" / "IMGS"
 
 _DEFAULT_MEME_DURATION_S = 2.8  # a meme interrupt stays punchy
 
@@ -103,6 +106,29 @@ class EffectsEngine:
             self._sfx_library,
             self._meme_library,
         ) = self._load()
+        self._asset_manager = None  # lazy; only needed for symbolic entries
+
+    def _resolve_asset(self, symbolic: str, category: str) -> Path | None:
+        """Symbolic name -> absolute file path via the AssetManager (or None).
+
+        The editor never references filenames: recipes carry names like
+        ``bass_thud`` / ``reaction_disappointed`` and the AssetManager maps them
+        to real files (`asset_manager` is a one-way import — it never imports
+        the editor). Requires a synced index (``python -m asset_manager.main sync``).
+        """
+        if self._asset_manager is None:
+            try:
+                from asset_manager.manager import AssetManager
+
+                self._asset_manager = AssetManager()
+            except ImportError as exc:  # pragma: no cover - env-dependent
+                logger.warning("asset_manager unavailable (%s); cannot resolve %r", exc, symbolic)
+                return None
+        asset = self._asset_manager.resolve(symbolic, category=category)
+        if asset is None:
+            logger.warning("No asset resolves %r (category %s)", symbolic, category)
+            return None
+        return _PROJECT_ROOT / asset.path
 
     def _load(
         self,
@@ -183,9 +209,12 @@ class EffectsEngine:
             if not entry:
                 logger.warning("No meme asset %r in meme_library", asset)
                 continue
-            path = _MEME_DIR / str(entry.get("file", ""))
-            if not path.is_file():
-                logger.warning("Meme file missing: %s", path)
+            if "file" in entry:  # legacy literal filename
+                path = _MEME_DIR / str(entry["file"])
+            else:  # symbolic name -> AssetManager (video/gif only)
+                path = self._resolve_asset(str(entry.get("symbol", asset)), "gifs")
+            if path is None or not path.is_file():
+                logger.warning("Meme unavailable: %s", asset)
                 continue
             mode = str(entry.get("mode", "cutaway"))
             if mode not in ("subject", "overlay", "cutaway"):
@@ -232,9 +261,13 @@ class EffectsEngine:
             # Rotate within the category (seeded) so repeats vary.
             pos = sfx_position.get(category, 0)
             sfx_position[category] = pos + 1
-            path = _SFX_DIR / files[(seed + pos) % len(files)]
-            if not path.is_file():
-                logger.warning("SFX file missing: %s", path)
+            entry = files[(seed + pos) % len(files)]
+            if "." in entry:  # legacy literal filename
+                path = _SFX_DIR / entry
+            else:  # symbolic name -> AssetManager (audio only)
+                path = self._resolve_asset(entry, "audio")
+            if path is None or not path.is_file():
+                logger.warning("SFX unavailable: %s", entry)
                 continue
             start = max(0.0, reel_offset + anchor + float(effect.get("offset", 0.0)))
             cues.append(SfxCue(path, round(start, 3), float(effect.get("volume", 0.8))))

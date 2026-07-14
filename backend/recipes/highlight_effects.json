@@ -1,35 +1,36 @@
 {
-  "schema_version": "2.3",
+  "schema_version": "2.4",
   "comment": "Editing Language (hyper-gaming / TikTok style). ROLE -> list of recipe VARIANTS (cycled, seeded per video) so repeated beats differ on purpose. A STYLE PACK is a different copy of this file. Effects fire at 'offset' seconds from the clip's IMPACT ANCHOR ('{label}' -> clip label). Audio: 'sfx' effects mix a meme sound (from Memes/SFX, chosen from a named category) OVER the original game audio - they never replace it. A 'meme' effect INSERTS a meme-video INTERRUPT right AFTER the clip: the game FREEZES on its last frame while the meme plays with its own audio, then the reel resumes. Meme treatments (Memes/IMGS, keyed by 'asset' -> meme_library): 'subject' AI-removes the background (any clip with a separable subject), 'overlay' chroma-keys (green/white screens), 'cutaway' full-frame. 'callout' = bold animated caption: 'animation' pop|punch|slide|rise|fade, 'color' any ffmpeg colour, optional 'size' + 'y' (0-1 height fraction). zoom intensity = extra scale (0.15=115%); shake = px amplitude (needs a zoom); flash = added brightness 0-1; sfx volume defaults 0.8.",
-  "meme_comment": "mode 'subject' = AI background removal (rembg) -> the moving subject is isolated and composited over the frozen game (works on ANY clip with a separable subject, no green screen needed); 'overlay' = fast chroma-key for real green/white screens; 'cutaway' = full-frame takeover for stylised clips with no isolatable subject. 'fps' (subject only) is the matte frame rate (memes tolerate ~15).",
+  "meme_comment": "mode 'subject' = AI background removal (rembg) -> the moving subject is isolated and composited over the frozen game (works on ANY clip with a separable subject, no green screen needed); 'overlay' = fast chroma-key for real green/white screens; 'cutaway' = full-frame takeover for stylised clips with no isolatable subject. 'fps' (subject only) is the matte frame rate (memes tolerate ~15). 'symbol' is a SYMBOLIC name the AssetManager resolves (never a filename); legacy 'file' entries still work.",
   "meme_library": {
     "cillian": {
-      "file": "disappointed-cillian-murphy-meme-template-vflVmd0L_w-video.mp4",
+      "symbol": "disappointed_reaction",
       "mode": "subject",
       "fps": 15,
       "volume": 1.0,
       "max_duration": 2.8
     },
     "jonhamm": {
-      "file": "jon-hamm-dancing-meme-template-turn-the-lights-off-SP_CULtID--video.mp4",
+      "symbol": "dancing_celebration",
       "mode": "cutaway",
       "volume": 1.0,
       "max_duration": 2.8
     }
   },
+  "sfx_comment": "categories -> SYMBOLIC names resolved by the AssetManager within audio/ (tag match; never filenames). Entries containing a '.' are treated as legacy literal filenames under Memes/SFX.",
   "sfx_library": {
-    "impact": ["dragon-studio-thud-sound-effect-405470.mp3", "u_60prvfn0xb-thud-sound-effect-319090.mp3"],
-    "pop": ["u_1thl5d0szy-memeclick-506437.mp3"],
-    "hype": ["universfield-yeah-boy-114748.mp3", "alex_jauk-woooooaah-199849.mp3"],
-    "amazing": ["roninthebro-isnt-that-amazing-meme-sfx-172488.mp3", "freesound_community-wowowowowowowow-103214.mp3"],
-    "tension": ["u_a7pk5xrn16-waterphone-174768.mp3"],
+    "impact": ["bass_thud", "impact_metal_heavy"],
+    "pop": ["pop_click"],
+    "hype": ["hype_shout", "hype_crowd"],
+    "amazing": ["amazing_praise", "amazing_excited"],
+    "tension": ["tension_riser"],
     "comedy": [
-      "ennismore-goofy-ahh-car-horn-200870.mp3",
-      "shelvis_makes_games-sus-meme-sound-181271.mp3",
-      "50986408-what-meme-388653.mp3",
-      "u_ecyjl18pfk-wait-a-minute-who-are-you-425166.mp3",
-      "apebble-fart-4-228244.mp3",
-      "johnnybacon156-i-got-this-467997.mp3"
+      "comedy_goofy",
+      "comedy_sus",
+      "comedy_confused",
+      "comedy_interrupt",
+      "comedy_gross",
+      "comedy_confident"
     ]
   },
   "recipes": {

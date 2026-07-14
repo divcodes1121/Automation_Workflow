@@ -84,6 +84,8 @@ experiments/**/models/
 /assets/transitions/
 /assets/comic/
 /assets/camera/
+/assets/fonts/*
+!assets/fonts/NotoSans-Bold.ttf
 /assets/_cache/
 /assets/asset_manifest.json
 /assets/asset_index.db
