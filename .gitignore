@@ -57,7 +57,11 @@ edited/
 backend/output/
 voice/
 uploads/
-scripts/
+# scripts/ was an output folder; it now also holds committed automation entry
+# points. Excluding the CONTENTS rather than the directory is what allows the
+# re-include below -- git cannot re-include a file inside an excluded directory.
+scripts/*
+!scripts/*.bat
 logs/
 
 # Secrets / OAuth tokens

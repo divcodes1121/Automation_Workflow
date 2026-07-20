@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 # Minimal scope needed to insert a video and set its thumbnail.
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 
+# Resumable-upload chunk size. Must be a multiple of 256 KB. 8 MB keeps each
+# request short enough to survive a flaky link while staying efficient on a
+# multi-gigabyte long-form video.
+_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+_CHUNK_RETRIES = 5
+# Transport-level failures that a resumable session can simply continue past.
+_RETRYABLE = (ConnectionError, TimeoutError, OSError)
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -72,17 +80,51 @@ class YouTubeUploader:
         thumbnail: Path,
         privacy: str | None = None,
     ) -> dict[str, Any]:
+        """Validate inputs and build the YouTube request from a Project.
+
+        Thin wrapper over :meth:`prepare_video` for the narrated pipeline, whose
+        metadata lives on the :class:`~backend.models.Project`.
+        """
+        return self.prepare_video(
+            video,
+            title=project.title,
+            description=project.description,
+            tags=project.tags,
+            language=project.language,
+            thumbnail=thumbnail,
+            privacy=privacy,
+        )
+
+    def prepare_video(
+        self,
+        video: Path,
+        *,
+        title: str,
+        description: str,
+        tags: list[str],
+        language: str = "en",
+        thumbnail: Path | None = None,
+        privacy: str | None = None,
+        publish_at: datetime | None = None,
+    ) -> dict[str, Any]:
         """Validate inputs and build the YouTube request. No API/auth.
+
+        Metadata is passed directly rather than through a ``Project`` so gameplay
+        clips can be uploaded without inventing narration fields (``long_script``,
+        ``voice_style``) that do not apply to them.
+
+        ``thumbnail`` is optional: YouTube does not take custom thumbnails for
+        Shorts, and an auto-selected frame is better than a fabricated one.
 
         Raises
         ------
         UploadRequestError
-            If the video or thumbnail is missing.
+            If the video (or a supplied thumbnail) is missing.
         """
         problems: list[str] = []
         if not Path(video).is_file():
             problems.append(f"video not found: {video}")
-        if not Path(thumbnail).is_file():
+        if thumbnail is not None and not Path(thumbnail).is_file():
             problems.append(f"thumbnail not found: {thumbnail}")
         if problems:
             raise UploadRequestError("Cannot upload:\n- " + "\n- ".join(problems))
@@ -90,21 +132,41 @@ class YouTubeUploader:
         resolved_privacy = privacy or self._settings.youtube_default_privacy
         body = {
             "snippet": {
-                "title": project.title,
-                "description": project.description,
-                "tags": project.tags,
+                # YouTube rejects titles over 100 chars outright.
+                "title": title[:100],
+                "description": description[:5000],
+                "tags": tags,
                 "categoryId": self._settings.youtube_category_id,
-                "defaultLanguage": project.language,
+                "defaultLanguage": language,
+                # Declaring the audio language is an accessibility signal: it is
+                # what lets YouTube offer auto-captions and translated metadata.
+                # Without it a video is treated as language-unknown.
+                "defaultAudioLanguage": language,
             },
             "status": {
                 "privacyStatus": resolved_privacy,
+                # Never "made for kids": that setting strips comments, disables
+                # personalised ads and removes the video from most surfaces.
                 "selfDeclaredMadeForKids": False,
             },
         }
+        if publish_at is not None:
+            # Scheduled publishing: YouTube requires the video to be inserted as
+            # private, then flips it public at this instant. This is what lets the
+            # heavy processing/upload run whenever the machine is free while the
+            # video still goes live at the audience's peak hour.
+            if publish_at.tzinfo is None:
+                raise UploadRequestError("publish_at must be timezone-aware")
+            body["status"]["privacyStatus"] = "private"
+            body["status"]["publishAt"] = (
+                publish_at.astimezone(timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
         return {
             "body": body,
             "video": str(Path(video)),
-            "thumbnail": str(Path(thumbnail)),
+            "thumbnail": str(Path(thumbnail)) if thumbnail is not None else None,
             "privacy": resolved_privacy,
         }
 
@@ -121,7 +183,11 @@ class YouTubeUploader:
         ------
         UploadRequestError, UploadAuthError, UploadError
         """
-        request = self.prepare(project, video, thumbnail, privacy)
+        return self.upload_request(self.prepare(project, video, thumbnail, privacy))
+
+    def upload_request(self, request: dict[str, Any]) -> UploadResult:
+        """Execute a request built by :meth:`prepare`/:meth:`prepare_video`."""
+        title = request["body"]["snippet"]["title"]
         youtube = self._service()
 
         from googleapiclient.errors import HttpError
@@ -129,26 +195,56 @@ class YouTubeUploader:
 
         started = time.perf_counter()
         try:
-            media = MediaFileUpload(request["video"], chunksize=-1, resumable=True, mimetype="video/*")
+            # Chunked, not chunksize=-1. Sending the whole file as one request has
+            # no resume point, so a single network blip loses everything -- a
+            # 1.4 GB upload died on ConnectionResetError that way. Chunking lets
+            # the resumable protocol retry just the failed slice.
+            media = MediaFileUpload(
+                request["video"],
+                chunksize=_UPLOAD_CHUNK_BYTES,
+                resumable=True,
+                mimetype="video/*",
+            )
             insert = youtube.videos().insert(
                 part="snippet,status", body=request["body"], media_body=media
             )
             response = None
+            attempts = 0
             while response is None:
-                _status, response = insert.next_chunk()
+                try:
+                    status, response = insert.next_chunk(num_retries=_CHUNK_RETRIES)
+                    attempts = 0
+                    if status:
+                        logger.info("Upload progress: %d%%", int(status.progress() * 100))
+                except _RETRYABLE as exc:
+                    # The connection dropped mid-chunk. The resumable session is
+                    # still valid, so backing off and continuing resumes from the
+                    # last acknowledged byte rather than restarting the file.
+                    attempts += 1
+                    if attempts > _CHUNK_RETRIES:
+                        raise UploadError(
+                            f"upload failed after {_CHUNK_RETRIES} retries: {exc}"
+                        ) from exc
+                    delay = 2 ** attempts
+                    logger.warning(
+                        "Connection dropped mid-upload (%s); retry %d/%d in %ds",
+                        type(exc).__name__, attempts, _CHUNK_RETRIES, delay,
+                    )
+                    time.sleep(delay)
         except HttpError as exc:
             raise UploadError(f"YouTube video insert failed: {exc}") from exc
 
         video_id = response["id"]
         thumbnail_uploaded = False
-        try:
-            youtube.thumbnails().set(
-                videoId=video_id,
-                media_body=MediaFileUpload(request["thumbnail"], mimetype="image/png"),
-            ).execute()
-            thumbnail_uploaded = True
-        except HttpError as exc:  # non-fatal — video is already up.
-            logger.warning("Thumbnail set failed for %s: %s", video_id, exc)
+        if request.get("thumbnail"):
+            try:
+                youtube.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(request["thumbnail"], mimetype="image/png"),
+                ).execute()
+                thumbnail_uploaded = True
+            except HttpError as exc:  # non-fatal — video is already up.
+                logger.warning("Thumbnail set failed for %s: %s", video_id, exc)
 
         elapsed = time.perf_counter() - started
         self._last_response = response
@@ -156,7 +252,7 @@ class YouTubeUploader:
         result = UploadResult(
             video_id=video_id,
             url=f"https://youtu.be/{video_id}",
-            title=project.title,
+            title=title,
             privacy=request["privacy"],
             status="uploaded",
             upload_time=datetime.now(timezone.utc),
@@ -164,7 +260,7 @@ class YouTubeUploader:
             thumbnail_uploaded=thumbnail_uploaded,
             elapsed_seconds=round(elapsed, 3),
         )
-        logger.info("Uploaded %r -> %s (%.1fs)", project.title, result.url, elapsed)
+        logger.info("Uploaded %r -> %s (%.1fs)", title, result.url, elapsed)
         return result
 
     def save(self, result: UploadResult, destination: Path | None = None) -> Path:
