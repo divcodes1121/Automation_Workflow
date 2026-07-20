@@ -145,6 +145,9 @@ class Settings(BaseModel):
     # -- YouTube upload (OAuth) ------------------------------------------------
     youtube_client_secret_file: Path
     youtube_token_file: Path
+    # Fixed OAuth loopback port, so the consent URL is stable and reusable
+    # rather than changing on every run.
+    youtube_oauth_port: int = Field(default=8765, gt=0, le=65535)
     youtube_default_privacy: str = Field(default="private")
     # Scheduled publishing, as IST wall-clock times (India is UTC+5:30, no DST).
     # The long-form lands at the evening peak; the shorts are spread across the
@@ -296,6 +299,7 @@ def get_settings() -> Settings:
         youtube_token_file=_env_path(
             "YOUTUBE_TOKEN_FILE", _PROJECT_ROOT / "config" / "youtube_token.json"
         ),
+        youtube_oauth_port=int(os.getenv("YOUTUBE_OAUTH_PORT", "8765")),
         youtube_default_privacy=os.getenv("YOUTUBE_DEFAULT_PRIVACY", "private"),
         channel_rank=os.getenv("CHANNEL_RANK", ""),
         channel_season=os.getenv("CHANNEL_SEASON", ""),

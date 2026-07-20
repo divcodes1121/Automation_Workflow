@@ -317,7 +317,14 @@ class YouTubeUploader:
                 f"its JSON there (or set YOUTUBE_CLIENT_SECRET_FILE)."
             )
         flow = InstalledAppFlow.from_client_secrets_file(str(secret), [YOUTUBE_UPLOAD_SCOPE])
-        creds = flow.run_local_server(port=0)
+        # A FIXED callback port, not port=0. A random port makes the consent URL
+        # different every time, so a link cannot be reused or written down; with a
+        # fixed one the same URL works on every re-auth. Google permits any
+        # loopback port for Desktop clients, so nothing needs registering.
+        creds = flow.run_local_server(
+            port=self._settings.youtube_oauth_port,
+            prompt="consent",  # always return a refresh token, even on re-auth
+        )
         token.parent.mkdir(parents=True, exist_ok=True)
         token.write_text(creds.to_json(), encoding="utf-8")
         return creds
