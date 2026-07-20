@@ -53,8 +53,9 @@ per match**.
 python -m backend.main auto --profile iphone_16_pro_max --upload
 ```
 
-Uploads default to **private** (`YOUTUBE_DEFAULT_PRIVACY`). Use
-`--privacy unlisted|public` deliberately, once you have watched the output.
+Uploads land **private and stay private** -- nothing is auto-published. You
+make videos public yourself in YouTube Studio. Add `--schedule` to hand that
+decision to the IST slots below, or `--privacy public` to publish immediately.
 
 ### See what would be posted first
 
@@ -118,7 +119,7 @@ PUBLISH_LONG_AT=20:00
 PUBLISH_SHORTS_AT=13:00,18:00,21:30
 ```
 
-`--no-schedule` publishes immediately instead.
+Scheduling is **off by default**; `--schedule` turns it on.
 
 Times are IST (UTC+5:30, fixed — India has no DST, so no `tzdata` dependency).
 A slot less than 30 minutes away rolls to the next day, because YouTube rejects

@@ -9,15 +9,15 @@ REM    schtasks /Create /TN "CR Daily Publish" /TR "\"<repo>\scripts\daily_publi
 REM             /SC DAILY /ST 09:00 /RL LIMITED /F
 REM
 REM  WHY 09:00: the run takes ~50 minutes (about 31 processing + 15 uploading),
-REM  and videos are SCHEDULED rather than published on upload. The earliest
-REM  publish slot is 13:00 IST, so a 09:00 start leaves roughly three hours of
-REM  slack for a slow link before the first video is due to go live.
+REM  so a morning start leaves the videos waiting privately in Studio well before
+REM  the evening, whenever you get round to reviewing and publishing them.
 REM
 REM  Exit code 0 = success. Anything else is a failure worth looking at; the
 REM  full log for the run is written under logs/.
 REM
-REM  PRIVACY: defaults to whatever YOUTUBE_DEFAULT_PRIVACY is set to in .env
-REM  (private unless you change it). Edit PRIVACY below to override.
+REM  PRIVACY: uploads land PRIVATE and stay private. Nothing is auto-published;
+REM  you make videos public yourself in YouTube Studio. Add --schedule to hand
+REM  that decision to the configured IST slots instead.
 REM ============================================================================
 
 setlocal

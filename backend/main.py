@@ -1936,8 +1936,9 @@ def auto(
         None, "--privacy", help="private | unlisted | public (default: config, private)."
     ),
     schedule: bool = typer.Option(
-        True, "--schedule/--no-schedule",
-        help="Publish at the configured IST slots instead of immediately.",
+        False, "--schedule/--no-schedule",
+        help="Auto-publish at the configured IST slots. Off by default: uploads "
+             "stay private until you publish them yourself.",
     ),
     cleanup: bool = typer.Option(
         False, "--cleanup",

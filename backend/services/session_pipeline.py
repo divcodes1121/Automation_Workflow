@@ -190,15 +190,19 @@ class SessionPipeline:
         sample_fps: float | None = None,
         upload: bool = False,
         privacy: str | None = None,
-        schedule: bool = True,
+        schedule: bool = False,
         on_stage: Callable[[SessionStage, str], None] | None = None,
     ) -> SessionResult:
         """Process one recording end to end.
 
-        With ``upload`` the merged long-form video and every short are published
-        to YouTube. It defaults to off, and the privacy default is ``private``,
-        so publishing is always a deliberate act rather than a side effect of
+        With ``upload`` the merged long-form video and every short are sent to
+        YouTube. It defaults to off, and the privacy default is ``private``, so
+        publishing is always a deliberate act rather than a side effect of
         processing footage.
+
+        ``schedule`` is likewise off by default: an upload stays private until a
+        human makes it public. Turning it on hands that decision to ``publishAt``
+        and a clock, which is only appropriate once the output is trusted.
         """
         if not recording.is_file():
             raise SessionError(SessionStage.SPLIT, f"recording not found: {recording}")
@@ -389,7 +393,7 @@ class SessionPipeline:
         merged_path: Path | None,
         privacy: str | None,
         warnings: list[str],
-        schedule: bool = True,
+        schedule: bool = False,
     ) -> list[UploadResult]:
         """Publish the merged long-form video and each short to YouTube.
 
