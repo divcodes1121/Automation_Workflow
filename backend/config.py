@@ -77,6 +77,8 @@ class Settings(BaseModel):
 
     # -- Working directories (all env-overridable, defaults under the repo) ----
     gameplay_raw_dir: Path
+    # Drop folder: recordings placed here are picked up by `auto` (Phase 3.3).
+    incoming_dir: Path
     gameplay_processed_dir: Path
     gameplay_archive_dir: Path
     gameplay_shorts_dir: Path
@@ -144,6 +146,16 @@ class Settings(BaseModel):
     youtube_client_secret_file: Path
     youtube_token_file: Path
     youtube_default_privacy: str = Field(default="private")
+    # Scheduled publishing, as IST wall-clock times (India is UTC+5:30, no DST).
+    # The long-form lands at the evening peak; the shorts are spread across the
+    # day so a single batch does not compete with itself for one session.
+    # Facts about the channel that NOTHING in the footage reveals -- the author
+    # asserts them. Title templates needing them stay unused while these are
+    # blank, so an unset rank can never become a false claim.
+    channel_rank: str = Field(default="")
+    channel_season: str = Field(default="")
+    publish_long_at: str = Field(default="20:00")
+    publish_shorts_at: str = Field(default="13:00,18:00,21:30")
     youtube_category_id: str = Field(default="20")  # Gaming
 
     # -- Speech synthesis (Kokoro sidecar) ------------------------------------
@@ -171,6 +183,7 @@ class Settings(BaseModel):
         """
         for path in (
             self.gameplay_raw_dir,
+            self.incoming_dir,
             self.gameplay_processed_dir,
             self.gameplay_archive_dir,
             self.gameplay_shorts_dir,
@@ -226,6 +239,7 @@ def get_settings() -> Settings:
     return Settings(
         project_root=_PROJECT_ROOT,
         gameplay_raw_dir=_env_path("GAMEPLAY_RAW_DIR", gameplay_root / "raw"),
+        incoming_dir=_env_path("GAMEPLAY_INCOMING_DIR", gameplay_root / "incoming"),
         gameplay_processed_dir=_env_path(
             "GAMEPLAY_PROCESSED_DIR", gameplay_root / "processed"
         ),
@@ -283,6 +297,10 @@ def get_settings() -> Settings:
             "YOUTUBE_TOKEN_FILE", _PROJECT_ROOT / "config" / "youtube_token.json"
         ),
         youtube_default_privacy=os.getenv("YOUTUBE_DEFAULT_PRIVACY", "private"),
+        channel_rank=os.getenv("CHANNEL_RANK", ""),
+        channel_season=os.getenv("CHANNEL_SEASON", ""),
+        publish_long_at=os.getenv("PUBLISH_LONG_AT", "20:00"),
+        publish_shorts_at=os.getenv("PUBLISH_SHORTS_AT", "13:00,18:00,21:30"),
         youtube_category_id=os.getenv("YOUTUBE_CATEGORY_ID", "20"),
         kokoro_python=_env_path(
             "KOKORO_PYTHON",

@@ -1136,3 +1136,59 @@ class RunResult(BaseModel):
     upload: UploadResult | None = None
     total_elapsed_seconds: float = Field(ge=0)
     created_at: datetime
+
+
+# Schema version stamped onto every SessionResult (a whole recording processed).
+SESSION_RESULT_SCHEMA_VERSION = "1.0"
+
+
+class SessionMatch(BaseModel):
+    """One match extracted from a session recording, and what it produced."""
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0)
+    clip_path: Path
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    # Filled in as the later stages run; a match can yield a clip but no short
+    # (for example when it holds too few plays to build a story arc).
+    analysis_path: Path | None = None
+    short_path: Path | None = None
+    signature_card: str | None = None
+    short_duration_seconds: float | None = None
+    note: str | None = None
+
+
+class SessionResult(BaseModel):
+    """Outcome of processing one session recording end to end (Phase 3.3).
+
+    The artifact ``auto`` writes: which matches were found in the recording,
+    where each clip/short landed, and the merged gameplay-only video. Pure data
+    -- no I/O.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    schema_version: str = SESSION_RESULT_SCHEMA_VERSION
+    recording: Path
+    split_plan_path: Path
+    merged_path: Path | None = None
+    matches: list[SessionMatch] = Field(default_factory=list)
+    # Populated only when the run was asked to publish (the long-form video
+    # first, then one entry per uploaded short).
+    uploads: list[UploadResult] = Field(default_factory=list)
+    completed_stages: list[str] = Field(default_factory=list)
+    stage_timings: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    total_elapsed_seconds: float = Field(ge=0)
+    created_at: datetime
+
+    @property
+    def match_count(self) -> int:
+        return len(self.matches)
+
+    @property
+    def short_count(self) -> int:
+        return sum(1 for m in self.matches if m.short_path is not None)

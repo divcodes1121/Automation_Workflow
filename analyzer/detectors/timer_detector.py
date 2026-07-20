@@ -82,9 +82,16 @@ class TimerDetector:
         roi = profile.rois.get(_TIMER_ROI)
         if roi is None or not self._templates:
             return TimerReading(None, None, MatchPhase.UNKNOWN, 0.0)
+        return self.read_region(crop(frame, roi))
 
-        region = crop(frame, roi)
-        if region.size == 0:
+    def read_region(self, region: np.ndarray) -> TimerReading:
+        """Read an already-cropped timer ROI.
+
+        Split out of :meth:`read` so callers that crop the ROI themselves -- the
+        battle splitter crops it with FFmpeg, which is far cheaper than decoding
+        whole 1320x2868 frames -- reuse this logic instead of duplicating it.
+        """
+        if not self._templates or region.size == 0:
             return TimerReading(None, None, MatchPhase.UNKNOWN, 0.0)
 
         overtime = self._is_overtime(region)

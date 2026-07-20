@@ -24,7 +24,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from analyzer.config import get_analyzer_settings
-from analyzer.models import FramesManifest, GameplayAnalysis, HandReading, TemplateLibrary
+from analyzer.models import (
+    FramesManifest,
+    GameplayAnalysis,
+    HandReading,
+    SplitPlan,
+    TemplateLibrary,
+)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -58,6 +64,7 @@ class ExitCode(IntEnum):
     CALIBRATION_ERROR = 7
     DETECT_ERROR = 8
     ANALYZE_ERROR = 9
+    SPLIT_ERROR = 10
 
 
 def _render_template_summary(library: TemplateLibrary, saved_to: Path | None) -> None:
@@ -348,6 +355,146 @@ def analyze(
     console.print(format_report(analysis))
     for warning in analysis.warnings:
         console.print(f"[yellow]note:[/yellow] {warning}")
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+def _render_split_summary(plan: SplitPlan, saved_to: Path | None) -> None:
+    """Render the detected matches + anything rejected (ASCII-only)."""
+    table = Table(show_header=True, box=None, pad_edge=False)
+    table.add_column("#", style="bold cyan", no_wrap=True)
+    table.add_column("Start", style="white")
+    table.add_column("End", style="white")
+    table.add_column("Length", style="white")
+    table.add_column("Clock", style="white")
+    table.add_column("Boundaries", style="white")
+    for battle in plan.battles:
+        table.add_row(
+            str(battle.index + 1),
+            _clock(battle.start_seconds),
+            _clock(battle.end_seconds),
+            _clock(battle.duration_seconds),
+            f"{battle.first_clock or '?'} -> {battle.last_clock or '?'}"
+            + (" (OT)" if battle.reached_overtime else ""),
+            f"{battle.start_source.value} / {battle.end_source.value}",
+        )
+    console.print(
+        Panel(
+            table,
+            title=f"[bold green]{plan.battle_count} match(es) found[/bold green]",
+            subtitle="[dim]Gameplay Analyzer[/dim]",
+            border_style="green",
+            expand=False,
+        )
+    )
+    for block in plan.discarded:
+        console.print(
+            f"[dim]discarded {_clock(block.start_seconds)}-{_clock(block.end_seconds)}: "
+            f"{block.reason}[/dim]"
+        )
+    for warning in plan.warnings:
+        console.print(f"[yellow]note:[/yellow] {warning}")
+    if saved_to is not None:
+        console.print(f"[dim]Plan {saved_to}[/dim]")
+
+
+def _clock(seconds: float) -> str:
+    """Seconds -> M:SS for the summary table."""
+    total = int(round(seconds))
+    return f"{total // 60}:{total % 60:02d}"
+
+
+@app.command(name="split")
+def split(
+    video: Path = typer.Argument(..., help="Long recording holding several matches."),
+    profile: str | None = typer.Option(None, "--profile", help="Calibration profile name."),
+    sample_fps: float | None = typer.Option(
+        None, "--sample-fps", help="Timer sampling rate (default: config, 1.0)."
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only", help="Detect the matches and report without cutting."
+    ),
+    merge: bool = typer.Option(
+        False, "--merge", help="Also concatenate the cut matches into one video."
+    ),
+    output_dir: Path | None = typer.Option(
+        None, "--output-dir", "-o", help="Where to write the per-match clips."
+    ),
+) -> None:
+    """Split a multi-match recording into one clip per match (Phase 3.3)."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from analyzer.calibration.profiles import CalibrationError, load_profile
+    from analyzer.segmentation.battle_splitter import BattleSplitError, BattleSplitter
+
+    settings = get_analyzer_settings()
+    settings.ensure_directories()
+    splitter = BattleSplitter(settings)
+    try:
+        calibration = load_profile(profile, settings)
+        plan = splitter.plan(video, profile=calibration, sample_fps=sample_fps)
+        saved_to = splitter.save(plan)
+        if not plan_only and plan.battles:
+            clips = splitter.split(plan, output_dir=output_dir)
+            # Re-save: split() stamps each battle with its output_path.
+            saved_to = splitter.save(plan)
+            if merge:
+                destination = (
+                    output_dir or settings.split_output_dir
+                ) / f"{video.stem}_merged.mp4"
+                splitter.merge(clips, destination)
+                console.print(f"[green]OK[/green] Merged -> {destination}")
+    except CalibrationError as exc:
+        console.print(f"[bold red]Calibration error:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.CALIBRATION_ERROR)
+    except BattleSplitError as exc:
+        console.print(f"[bold red]Split failed:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.SPLIT_ERROR)
+    except Exception as exc:  # noqa: BLE001 - final safety net for the CLI.
+        logger.exception("Unexpected error during split")
+        console.print(f"[bold red]Unexpected error:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.UNEXPECTED)
+
+    _render_split_summary(plan, saved_to)
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+@app.command(name="merge")
+def merge_matches(
+    split_plan: Path = typer.Argument(..., help="A split_plan.json written by `split`."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Merged MP4 (default: <recording>_merged.mp4)."
+    ),
+) -> None:
+    """Concatenate a plan's per-match clips into one gameplay-only video."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from analyzer.segmentation.battle_splitter import BattleSplitError, BattleSplitter
+
+    settings = get_analyzer_settings()
+    if not split_plan.is_file():
+        console.print(f"[bold red]Not found:[/bold red] {split_plan}")
+        raise typer.Exit(code=ExitCode.VIDEO_NOT_FOUND)
+    try:
+        plan = SplitPlan.model_validate_json(split_plan.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        console.print(f"[bold red]Invalid split plan:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.UNEXPECTED)
+
+    clips = [Path(b.output_path) for b in plan.battles if b.output_path]
+    if not clips:
+        console.print(
+            "[bold red]Nothing to merge:[/bold red] this plan has no cut clips "
+            "(run `split` without --plan-only first)."
+        )
+        raise typer.Exit(code=ExitCode.SPLIT_ERROR)
+
+    destination = output or (
+        settings.split_output_dir / f"{Path(plan.video).stem}_merged.mp4"
+    )
+    try:
+        BattleSplitter(settings).merge(clips, destination)
+    except BattleSplitError as exc:
+        console.print(f"[bold red]Merge failed:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.SPLIT_ERROR)
+    console.print(f"[green]OK[/green] Merged {len(clips)} matches -> {destination}")
     raise typer.Exit(code=ExitCode.SUCCESS)
 
 

@@ -400,3 +400,79 @@ class GameplayAnalysis(BaseModel):
     metrics: AnalyzerMetrics | None = None
     # Reserved for later slices; declared now to keep the schema stable.
     winner: str | None = None
+
+
+# Schema stamped onto the battle-split plan (Phase 3.3).
+SPLIT_PLAN_SCHEMA_VERSION = "1.0"
+
+
+class BoundarySource(StrEnum):
+    """How a battle boundary was placed."""
+
+    SCENE_CUT = "scene_cut"  # snapped to a detected hard cut (preferred)
+    FIXED_ROLL = "fixed_roll"  # no cut found; fell back to a fixed pre/post-roll
+    CLAMPED = "clamped"  # hit the start/end of the recording
+
+
+class DetectedBattle(BaseModel):
+    """One match found inside a longer recording.
+
+    The *clock* bounds are where the match timer was readable; the *cut* bounds
+    extend outward to the loading screen (before) and the crowns banner (after),
+    which is what actually gets written to disk.
+    """
+
+    model_config = _STRICT_CONFIG
+
+    index: int = Field(ge=0)
+    # Battle bounds (timer readable).
+    clock_start_seconds: float = Field(ge=0)
+    clock_end_seconds: float = Field(ge=0)
+    first_clock: str | None = None
+    last_clock: str | None = None
+    # Clip bounds (what gets cut) -- loading screen -> crowns banner.
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    start_source: BoundarySource
+    end_source: BoundarySource
+    # Evidence.
+    readable_samples: int = Field(ge=0)
+    total_samples: int = Field(ge=0)
+    reached_overtime: bool = False
+    confidence: float = Field(ge=0, le=1)
+    output_path: str | None = None
+
+
+class DiscardedBlock(BaseModel):
+    """A readable-timer block rejected as not a real match (with the reason)."""
+
+    model_config = _STRICT_CONFIG
+
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    reason: str
+
+
+class SplitPlan(BaseModel):
+    """Where each match sits inside a recording -- the splitter's artifact."""
+
+    model_config = _STRICT_CONFIG
+
+    schema_version: str = SPLIT_PLAN_SCHEMA_VERSION
+    video: str
+    video_sha256: str
+    duration_seconds: float = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    profile_name: str
+    sample_fps: float = Field(gt=0)
+    battles: list[DetectedBattle] = Field(default_factory=list)
+    discarded: list[DiscardedBlock] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_at: datetime
+
+    @property
+    def battle_count(self) -> int:
+        return len(self.battles)

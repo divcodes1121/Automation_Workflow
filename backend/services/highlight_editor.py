@@ -47,6 +47,25 @@ _MERGE_GAP_S = 0.25                      # near-adjacent windows fuse into one b
 _MAX_REEL_S = 45.0                       # Shorts budget
 _CRF = 20
 
+# Cards whose plays read as a MOMENT on screen: win conditions that commit to a
+# push, and heavy spells that visibly detonate. Plain frequency is the wrong
+# signal for choosing what a reel is about -- cheap cycle cards dominate it.
+# Measured on the reference matches, frequency picked "suspicious-bush" and
+# "the-log" (played 10-11x each, visually nothing) over the cards the deck
+# actually wins with. Lives here, in the editing layer, because both the reel
+# selection and the published metadata need it and neither may import the other.
+HIGHLIGHT_CARDS = frozenset({
+    # Win conditions.
+    "hog-rider", "royal-giant", "giant", "golem", "electro-giant", "goblin-giant",
+    "miner", "graveyard", "balloon", "lava-hound", "x-bow", "mortar",
+    "goblin-barrel", "skeleton-barrel", "ram-rider", "battle-ram", "wall-breakers",
+    "elixir-golem", "goblin-drill", "royal-hogs", "three-musketeers",
+    # Heavy / dramatic spells and tanks.
+    "rocket", "lightning", "fireball", "poison", "earthquake",
+    "sparky", "mega-knight", "pekka", "electro-dragon", "inferno-dragon",
+})
+
+
 # Viewer-facing card names for labels ("rocket" -> "ROCKET").
 def _card_label(slug: str) -> str:
     return slug.replace("-", " ").upper()
@@ -65,28 +84,40 @@ class HighlightEditor:
     # -- Planning (pure) ----------------------------------------------------- #
 
     def build(
-        self, analysis: dict[str, Any], video: Path, *, signature_card: str = "rocket"
+        self,
+        analysis: dict[str, Any],
+        video: Path,
+        *,
+        signature_card: str | None = "rocket",
+        cards: set[str] | None = None,
     ) -> HighlightPlan:
-        """Select the story beats and their event-synced windows (no I/O)."""
+        """Select the story beats and their event-synced windows (no I/O).
+
+        Pass ``cards`` to summarise a match across several cards -- the plays that
+        actually decide a game, its win conditions and spells -- instead of
+        repeating one card. Each clip is then labelled with its own card, so the
+        reel reads as "what happened in this match" rather than "every time I
+        played X". ``signature_card`` keeps the original single-card behaviour.
+        """
         if not isinstance(analysis, dict) or "events" not in analysis:
             raise HighlightError(
                 "not a gameplay analysis (missing 'events'); pass a "
                 "gameplay_analysis.json produced by the analyzer"
             )
         duration = float(analysis.get("duration_seconds") or 0.0)
-        plays = [
-            float(e.get("timestamp_seconds") or 0.0)
+        wanted = cards if cards else ({signature_card} if signature_card else set())
+        plays = sorted(
+            (float(e.get("timestamp_seconds") or 0.0), e["card"])
             for e in analysis.get("events", [])
-            if e.get("card") == signature_card
-        ]
+            if e.get("card") in wanted
+        )
         if not plays:
+            named = ", ".join(sorted(wanted)) or "(none)"
             raise HighlightError(
-                f"no '{signature_card}' plays found in this match; pick the deck's "
-                "signature card with --card"
+                f"no plays of {named} found in this match; pick a card with --card"
             )
-        plays.sort()
 
-        windows = _story_windows(plays, _phase_changes(analysis), duration, signature_card)
+        windows = _story_windows(plays, _phase_changes(analysis), duration)
         clips = [
             HighlightClip(
                 index=i,
@@ -419,17 +450,20 @@ def _phase_changes(analysis: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _story_windows(
-    plays: list[float],
+    plays: list[tuple[float, str]],
     phase_changes: list[dict[str, Any]],
     duration: float,
-    card: str,
 ) -> list[dict[str, Any]]:
-    """Arrange hook/beats/hero/victory + phase flashes into merged windows."""
-    label = _card_label(card)
+    """Arrange hook/beats/hero/victory + phase flashes into merged windows.
+
+    ``plays`` is ``(timestamp, card)`` so a reel can span several cards; each
+    window is labelled with the card that was actually played at that moment.
+    """
     raw: list[dict[str, Any]] = []
 
     # Hook = first play, tight. Hero = last play, longer. Middles = beats.
-    for i, ts in enumerate(plays):
+    for i, (ts, card) in enumerate(plays):
+        label = _card_label(card)
         if i == 0:
             role, pre, post, lab = HighlightRole.HOOK, _HOOK_PRE_S, _HOOK_POST_S, label
         elif i == len(plays) - 1:

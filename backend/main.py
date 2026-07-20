@@ -91,6 +91,7 @@ from backend.models import (
     Project,
     RenderResult,
     RunResult,
+    SessionResult,
     SubtitleTrack,
     ThumbnailPlan,
     ThumbnailResult,
@@ -182,6 +183,7 @@ class ExitCode(IntEnum):
     UPLOAD_AUTH_ERROR = 19
     GENERATE_PROMPT_ERROR = 20
     HIGHLIGHT_ERROR = 21
+    SESSION_ERROR = 22
 
 
 def _human_bytes(num: int) -> str:
@@ -1861,6 +1863,229 @@ def highlight(
         console.print(f"[green]OK[/green] Highlight reel -> {rendered}")
     else:
         console.print("[dim](--plan-only: not rendered)[/dim]")
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+def _render_session_summary(result: SessionResult, saved_to: Path) -> None:
+    """Render what one session recording produced (ASCII-only)."""
+    table = Table(show_header=True, box=None, pad_edge=False)
+    table.add_column("#", style="bold cyan", justify="right")
+    table.add_column("In recording", style="white")
+    table.add_column("Length", style="white", justify="right")
+    table.add_column("Short", style="green", justify="right")
+    table.add_column("Built around", style="yellow")
+    for match in result.matches:
+        short = (
+            f"{match.short_duration_seconds:.0f}s"
+            if match.short_duration_seconds is not None
+            else "-"
+        )
+        table.add_row(
+            str(match.index + 1),
+            f"{_human_duration(match.start_seconds)}-{_human_duration(match.end_seconds)}",
+            _human_duration(match.duration_seconds),
+            short,
+            (match.signature_card or "-").replace("-", " "),
+        )
+    console.print(
+        Panel(
+            table,
+            title=f"[bold green]{result.match_count} match(es), "
+            f"{result.short_count} short(s)[/bold green]",
+            subtitle="[dim]original game audio, no effects[/dim]",
+            border_style="green",
+            expand=False,
+        )
+    )
+    timings = ", ".join(f"{k} {v:.0f}s" for k, v in result.stage_timings.items())
+    console.print(f"[dim]Stages: {timings}[/dim]")
+    console.print(f"[dim]Total:  {_human_duration(result.total_elapsed_seconds)}[/dim]")
+    if result.merged_path:
+        console.print(f"[dim]Merged  {result.merged_path}[/dim]")
+    for match in result.matches:
+        if match.short_path:
+            console.print(f"[dim]Short   {match.short_path}[/dim]")
+    for upload in result.uploads:
+        console.print(f"[green]Uploaded[/green] {upload.privacy:8} {upload.url}  {upload.title}")
+    for warning in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {warning}")
+    console.print(f"[dim]Result  {saved_to}[/dim]")
+
+
+@app.command()
+def auto(
+    recording: Path | None = typer.Argument(
+        None, help="A session recording. Omitted: process everything in gameplay/incoming/."
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile", help="Analyzer calibration profile (capture device)."
+    ),
+    card: str | None = typer.Option(
+        None, "--card",
+        help="Anchor every short on ONE card (default: summarise win conditions + spells).",
+    ),
+    merge: bool = typer.Option(True, "--merge/--no-merge", help="Also write the combined video."),
+    shorts: bool = typer.Option(True, "--shorts/--no-shorts", help="Also cut one short per match."),
+    sample_fps: float | None = typer.Option(
+        None, "--sample-fps", help="Timer sampling rate used to find the matches."
+    ),
+    upload: bool = typer.Option(
+        False, "--upload", help="Publish the merged video + every short to YouTube."
+    ),
+    privacy: str | None = typer.Option(
+        None, "--privacy", help="private | unlisted | public (default: config, private)."
+    ),
+    schedule: bool = typer.Option(
+        True, "--schedule/--no-schedule",
+        help="Publish at the configured IST slots instead of immediately.",
+    ),
+    cleanup: bool = typer.Option(
+        False, "--cleanup",
+        help="After ALL uploads succeed, delete the clips, merge, shorts and frame cache.",
+    ),
+    cleanup_raw: bool = typer.Option(
+        False, "--cleanup-raw",
+        help="Also delete the original recording. IRREVERSIBLE; implies --cleanup.",
+    ),
+) -> None:
+    """Recording -> per-match clips + merged video + one short per match (Phase 3.3)."""
+    configure_logging()
+
+    from backend.services.session_pipeline import (
+        SessionError,
+        SessionPipeline,
+        SessionStage,
+    )
+
+    settings = get_settings()
+    settings.ensure_directories()
+    pipeline = SessionPipeline(settings)
+
+    from_inbox = recording is None
+    if recording is not None:
+        queue = [recording]
+    else:
+        queue = pipeline.pending()
+        if not queue:
+            console.print(
+                f"[yellow]Nothing to do.[/yellow] Drop a recording in {settings.incoming_dir} "
+                "and run this again."
+            )
+            raise typer.Exit(code=ExitCode.SUCCESS)
+        console.print(f"[bold]{len(queue)} recording(s) queued[/bold] from {settings.incoming_dir}")
+
+    def announce(stage: SessionStage, detail: str) -> None:
+        console.print(f"[dim]-> {stage.value}{f' ({detail})' if detail else ''}...[/dim]")
+
+    for item in queue:
+        console.print(f"\n[bold cyan]{item.name}[/bold cyan]")
+        try:
+            result = pipeline.run(
+                item, profile=profile, merge=merge, shorts=shorts,
+                signature_card=card, sample_fps=sample_fps,
+                upload=upload, privacy=privacy, schedule=schedule, on_stage=announce,
+            )
+        except SessionError as exc:
+            console.print(f"[bold red]Failed:[/bold red] {exc}")
+            raise typer.Exit(code=ExitCode.SESSION_ERROR)
+        except Exception as exc:  # noqa: BLE001 — final safety net for the CLI.
+            logger.exception("Unexpected error during auto run")
+            console.print(f"[bold red]Unexpected error:[/bold red] {exc}")
+            raise typer.Exit(code=ExitCode.UNEXPECTED)
+        _render_session_summary(result, pipeline.save(result))
+        # Only inbox items are archived: a recording named explicitly on the
+        # command line stays where the caller put it.
+        archived: Path | None = None
+        if from_inbox:
+            archived = pipeline.archive(item)
+            console.print(f"[dim]Archived {archived}[/dim]")
+
+        if cleanup or cleanup_raw:
+            # The raw recording is the one thing nothing can rebuild, so removing
+            # it takes its own flag rather than riding along with --cleanup.
+            raw = (archived or item) if cleanup_raw else None
+            try:
+                removed, freed = pipeline.cleanup(result, raw=raw)
+            except SessionError as exc:
+                console.print(f"[yellow]Cleanup skipped:[/yellow] {exc}")
+            else:
+                console.print(
+                    f"[green]Cleaned up[/green] {len(removed)} item(s), "
+                    f"freed {freed / 1024**3:.2f} GB"
+                    + ("  [dim](including the original recording)[/dim]" if raw else "")
+                )
+
+    raise typer.Exit(code=ExitCode.SUCCESS)
+
+
+@app.command(name="publish-preview")
+def publish_preview(
+    session_result: Path = typer.Argument(
+        ..., help="A session_result.json written by `auto`."
+    ),
+) -> None:
+    """Show the exact title/description/tags `auto --upload` would publish.
+
+    Reads only local artifacts: no credentials, no API calls, nothing uploaded.
+    """
+    configure_logging()
+    from backend.services.publish_metadata import (
+        load_analysis,
+        session_metadata,
+        short_metadata,
+    )
+
+    if not session_result.is_file():
+        console.print(f"[bold red]Not found:[/bold red] {session_result}")
+        raise typer.Exit(code=ExitCode.FILE_NOT_FOUND)
+    try:
+        result = SessionResult.model_validate_json(
+            session_result.read_text(encoding="utf-8")
+        )
+    except ValueError as exc:
+        console.print(f"[bold red]Invalid session result:[/bold red] {exc}")
+        raise typer.Exit(code=ExitCode.PARSE_ERROR)
+
+    analyses = [load_analysis(m.analysis_path) for m in result.matches]
+    previews: list[tuple[str, Any]] = []
+    if result.merged_path:
+        anchor = next((m.signature_card for m in result.matches if m.signature_card), None)
+        previews.append((
+            "LONG (merged)",
+            session_metadata(
+                analyses, [m.duration_seconds for m in result.matches], signature_card=anchor
+            ),
+        ))
+    used_titles: set[str] = {m.title for _, m in previews}
+    for match, analysis in zip(result.matches, analyses):
+        if match.short_path is not None:
+            meta = short_metadata(
+                analysis, match.signature_card, index=match.index, avoid=used_titles
+            )
+            used_titles.add(meta.title)
+            previews.append((f"SHORT {match.index + 1}", meta))
+
+    for label, meta in previews:
+        body = Table(show_header=False, box=None, pad_edge=False)
+        body.add_column("Field", style="bold cyan", no_wrap=True)
+        body.add_column("Value", style="white")
+        body.add_row("Title", meta.title)
+        body.add_row("Tags", ", ".join(meta.tags))
+        console.print(
+            Panel(
+                body,
+                title=f"[bold green]{label}[/bold green]",
+                border_style="green",
+                expand=False,
+            )
+        )
+        console.print(meta.description)
+        console.print()
+
+    console.print(
+        f"[dim]{len(previews)} video(s) would be published. "
+        "Winner/crown claims are absent by design: the analyzer does not detect them.[/dim]"
+    )
     raise typer.Exit(code=ExitCode.SUCCESS)
 
 

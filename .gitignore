@@ -90,3 +90,6 @@ experiments/**/models/
 /assets/asset_manifest.json
 /assets/asset_index.db
 /assets/asset_index.db-*
+
+# Session scratch work (spikes, contact sheets, probes)
+.scratch/

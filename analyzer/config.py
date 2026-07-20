@@ -147,6 +147,47 @@ class AnalyzerSettings(BaseModel):
     elixir_left_trim: float = Field(default=0.14, ge=0.0, le=0.5)
     elixir_column_fill: float = Field(default=0.30, ge=0.0, le=1.0)
 
+    # -- 3.3 Battle splitter ---------------------------------------------------
+    # Where the per-match clips cut out of a long recording are written.
+    split_output_dir: Path
+    # Timer sampling rate. 1/sec is plenty: a match lasts minutes and the clock
+    # only ticks once a second.
+    split_sample_fps: float = Field(default=1.0, gt=0)
+    # Readable-clock runs closer than this fuse into one match. Covers the
+    # final-minute flicker (gaps <= 8s observed) while staying well under the
+    # smallest observed gap BETWEEN matches (35s).
+    split_max_gap_s: float = Field(default=10.0, gt=0)
+    # Shorter blocks are discarded as accidental captures (replays, instant
+    # forfeits). Real matches ran 177-268s; accidents 2s and 15s.
+    split_min_battle_s: float = Field(default=60.0, gt=0)
+    # A Clash Royale clock never exceeds 3:00; higher reads are misdetections
+    # (the crowns banner + confetti can score a spurious 3-glyph match).
+    split_max_clock_seconds: int = Field(default=180, gt=0)
+    # Across a gap, a real clock ticks down by about the elapsed wall time. This
+    # is how much that may disagree before the two runs are treated as separate
+    # matches rather than one match seen through a gap.
+    split_clock_drift_s: float = Field(default=4.0, ge=0)
+    # How far outside the clock to hunt for the loading-screen / lobby cut.
+    split_scene_search_s: float = Field(default=14.0, gt=0)
+    # scdet score (0-100) above which a frame counts as a real screen transition.
+    # Measured: wanted boundaries scored 23-44, ordinary in-app animation <10.
+    split_scene_min_score: float = Field(default=15.0, gt=0.0, le=100.0)
+    # How far BEFORE the last clock read to start hunting for the end boundary.
+    # An overtime clock can freeze on screen and keep reading into the result
+    # screen, putting the last read past the real cut. Safe because gameplay
+    # produces no cut near split_scene_min_score.
+    split_end_lookback_s: float = Field(default=4.0, ge=0.0)
+    # Stream copy must start on a keyframe. How far BEFORE the boundary one may
+    # sit and still be chosen. Default 0 = never start early, so no frame of the
+    # previous screen can survive -- important because frame 0 becomes the clip's
+    # poster frame, and a flash of Battle Log there looks like a mistake. The cost
+    # is opening up to a keyframe interval (~1s) into the match intro. Raise this
+    # to trade a sliver of the previous screen for a more exact opening.
+    split_keyframe_backfill_s: float = Field(default=0.0, ge=0.0)
+    # Used when no scene cut is found in the search window.
+    split_pre_roll_s: float = Field(default=6.0, ge=0.0)
+    split_post_roll_s: float = Field(default=6.0, ge=0.0)
+
     def cache_root(self) -> Path:
         """Versioned template-cache root: ``template_cache_dir/<CACHE_VERSION>``."""
         return self.template_cache_dir / CACHE_VERSION
@@ -188,6 +229,20 @@ def get_analyzer_settings() -> AnalyzerSettings:
         analysis_output_dir=_env_path(
             "ANALYZER_ANALYSIS_DIR", _PROJECT_ROOT / "gameplay" / "analysis"
         ),
+        split_output_dir=_env_path(
+            "ANALYZER_SPLIT_DIR", _PROJECT_ROOT / "gameplay" / "raw"
+        ),
+        split_sample_fps=float(os.getenv("ANALYZER_SPLIT_SAMPLE_FPS", "1.0")),
+        split_max_gap_s=float(os.getenv("ANALYZER_SPLIT_MAX_GAP", "10.0")),
+        split_min_battle_s=float(os.getenv("ANALYZER_SPLIT_MIN_BATTLE", "60.0")),
+        split_max_clock_seconds=int(os.getenv("ANALYZER_SPLIT_MAX_CLOCK", "180")),
+        split_clock_drift_s=float(os.getenv("ANALYZER_SPLIT_CLOCK_DRIFT", "4.0")),
+        split_scene_search_s=float(os.getenv("ANALYZER_SPLIT_SCENE_SEARCH", "14.0")),
+        split_scene_min_score=float(os.getenv("ANALYZER_SPLIT_SCENE_MIN_SCORE", "15.0")),
+        split_end_lookback_s=float(os.getenv("ANALYZER_SPLIT_END_LOOKBACK", "4.0")),
+        split_keyframe_backfill_s=float(os.getenv("ANALYZER_SPLIT_KEYFRAME_BACKFILL", "0.0")),
+        split_pre_roll_s=float(os.getenv("ANALYZER_SPLIT_PRE_ROLL", "6.0")),
+        split_post_roll_s=float(os.getenv("ANALYZER_SPLIT_POST_ROLL", "6.0")),
         template_height=int(os.getenv("ANALYZER_TEMPLATE_HEIGHT", "168")),
         frame_sample_fps=float(os.getenv("ANALYZER_SAMPLE_FPS", "5.0")),
         frame_image_format=os.getenv("ANALYZER_FRAME_FORMAT", "png"),
